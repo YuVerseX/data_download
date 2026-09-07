@@ -2,5 +2,9 @@
 
 tqdm>=4.66               # 所有脚本：进度条
 
+h5py>=3.10               # download_mur_sst.py：校验下载的文件是否被截断，必需
+
+copernicusmarine>=2.0    # download_glorys.py：CMEMS 官方工具箱，下载走它
+xarray>=2024.10          # download_glorys.py：多年块按年切分、校验 time 维
+
 # cdsapi>=0.7            # download_era5.py
-# copernicusmarine>=2.0  # download_cmems.py
