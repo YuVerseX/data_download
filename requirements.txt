@@ -1,0 +1,6 @@
+# 依赖后面注明哪个脚本需要，方便删脚本时对照清理
+
+tqdm>=4.66               # 所有脚本：进度条
+
+# cdsapi>=0.7            # download_era5.py
+# copernicusmarine>=2.0  # download_cmems.py

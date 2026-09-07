@@ -1,0 +1,95 @@
+# 本仓库只存放脚本，任何下载下来的数据都不入库。
+
+# ---------- 科学数据格式 ----------
+*.nc
+*.nc4
+*.cdf
+*.hdf
+*.hdf5
+*.h5
+*.he5
+*.grib
+*.grib2
+*.grb
+*.grb2
+*.bufr
+*.tif
+*.tiff
+*.mat
+*.npy
+*.npz
+*.parquet
+*.zarr/
+
+# ---------- 下载中间产物 ----------
+*.part
+*.partial
+*.download
+*.crdownload
+*.aria2
+*.tmp
+
+# ---------- 压缩包 ----------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+
+# ---------- 常见落盘目录 ----------
+data/
+Data/
+raw/
+download/
+downloads/
+output/
+outputs/
+
+# ---------- 凭据（绝不入库）----------
+.env
+.env.*
+!.env.example
+.netrc
+_netrc
+*.netrc
+credentials.json
+secrets.json
+token.txt
+cookies.txt
+*.pem
+*.key
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---------- 日志 ----------
+*.log
+logs/
+
+# ---------- 编辑器 / 操作系统 ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
