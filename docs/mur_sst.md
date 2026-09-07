@@ -2,6 +2,15 @@
 
 脚本：[download_mur_sst.py](../download_mur_sst.py)
 
+| 项目 | 值 |
+| --- | --- |
+| 数据集覆盖 | 2002-06-01 至今；2026-09-07 实测 8863 天，逐日连续零缺日 |
+| 时间分辨率 | 逐日，时间戳固定 09:00Z，近实时延迟约 1 天 |
+| 脚本可用范围 | 2002-06-01 至今，不给日期参数则默认今年 |
+| 空间分辨率 | 0.01° 全球网格，lat 17999 × lon 36000 |
+| 默认区域 | 南海 105–125°E, 0–25°N（2501 × 2001 格点） |
+| 体积 | 4.16 MiB/天，约 1.5 GiB/年，全量约 37 GiB |
+
 ```powershell
 python F:\Code\data_download\download_mur_sst.py -o "D:\MUR"                    # 默认今年
 python F:\Code\data_download\download_mur_sst.py 2020-2024 -o "D:\MUR"

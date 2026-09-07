@@ -2,13 +2,22 @@
 
 脚本：[download_glorys.py](../download_glorys.py)
 
+| 项目 | 值 |
+| --- | --- |
+| 数据集覆盖 | 1993-01-01 – 2026-06-23（2026-09-07 实测） |
+| 时间分辨率 | 日均 |
+| 脚本可用范围 | 1993–2025（2026 非完整年，会让 time 维校验失效，不收） |
+| 空间分辨率 | 1/12°（约 8 km），50 层 |
+| 默认区域 | 南海 105–125°E, 0–25°N |
+| 体积 | 落盘 12.7 GB/年（南海全深度 5 变量）；**网络流量另算，见「流量放大」** |
+
 ```powershell
 python F:\Code\data_download\download_glorys.py 2020 -o D:\GLORYS
 python F:\Code\data_download\download_glorys.py 2016-2020 -o D:\GLORYS
 python F:\Code\data_download\download_glorys.py 2001,2003-2005 -o D:\GLORYS
 ```
 
-年份写法和 SCSORA 一致，可用范围 2001–2025（下限其实是 1993）。
+年份写法和 SCSORA 一致，可用范围 1993–2025。
 不给 `-o` 就下到当前工作目录。**下之前先跑 `-n` 看流量**，理由见下面「流量放大」。
 
 默认下南海（105–125°E, 0–25°N）全深度 5 个变量。改范围用 `--bbox W E S N`、

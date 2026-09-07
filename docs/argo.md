@@ -2,6 +2,16 @@
 
 脚本：[download_argo.py](../download_argo.py)
 
+| 项目 | 值 |
+| --- | --- |
+| 数据集覆盖 | 全球 1997 至今 |
+| **默认南海范围内实际跨度** | **2006-01-30 – 2022-04-26**，2022 年 4 月后无数据，见「坑」 |
+| 时间分辨率 | 离散剖面，无固定间隔 |
+| 脚本可用范围 | 1997 – 当前年（`--years`，上限随系统日期走） |
+| 空间分辨率 | 离散剖面点，非网格 |
+| 默认区域 | 南海 105–121°E, 2–25°N |
+| 体积 | 18–22 KiB/剖面，默认范围全量约 290 MiB（14,786 条） |
+
 ```powershell
 python F:\Code\data_download\download_argo.py -o D:\Argo -n          # 只筛选统计，不下载
 python F:\Code\data_download\download_argo.py -o D:\Argo             # 下载默认南海全部剖面

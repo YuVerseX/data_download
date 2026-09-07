@@ -2,6 +2,14 @@
 
 脚本：[download_scsora.py](../download_scsora.py)
 
+| 项目 | 值 |
+| --- | --- |
+| 数据集覆盖 | 2001–2024，逐年文件共 24 个，无缺年 |
+| 时间分辨率 | 逐日 |
+| 脚本可用范围 | 2001–2024 |
+| 空间范围 / 分辨率 | 南海；上游无说明文档，分辨率未证实 |
+| 体积 | 171.8 GiB/年，全量约 4.0 TiB |
+
 ```powershell
 python F:\Code\data_download\download_scsora.py 2001 -o D:\SCSORA
 python F:\Code\data_download\download_scsora.py 2001-2005 -o D:\SCSORA

@@ -4,12 +4,12 @@
 
 ## 脚本清单
 
-| 脚本                                    | 数据集                       | 单文件体积 | 说明                            |
-| --------------------------------------- | ---------------------------- | ---------- | ------------------------------- |
-| [download_scsora.py](download_scsora.py) | SCSORA 逐日再分析 2001–2024 | ~172 GiB   | [docs/scsora.md](docs/scsora.md) |
-| [download_mur_sst.py](download_mur_sst.py) | MUR L4 海表温度 2002-06 至今（默认南海） | ~4 MiB | [docs/mur_sst.md](docs/mur_sst.md) |
-| [download_argo.py](download_argo.py)     | Argo 剖面（默认南海）        | ~20 KiB    | [docs/argo.md](docs/argo.md)     |
-| [download_glorys.py](download_glorys.py) | GLORYS12V1 逐日再分析 1993–2025（默认南海） | ~6 GiB（南海全深度单年） | [docs/glorys.md](docs/glorys.md) |
+| 脚本                                      | 数据集                        | 时间范围                                       | 时间分辨率 | 单文件体积                 | 说明                              |
+| ----------------------------------------- | ----------------------------- | ---------------------------------------------- | ---------- | -------------------------- | --------------------------------- |
+| [download_scsora.py](download_scsora.py)   | SCSORA 再分析                 | 2001–2024                                     | 逐日       | ~172 GiB（每年一个文件）   | [docs/scsora.md](docs/scsora.md)   |
+| [download_mur_sst.py](download_mur_sst.py) | MUR L4 海表温度（默认南海）   | 2002-06-01 至今                                | 逐日       | ~4 MiB（每天一个文件）     | [docs/mur_sst.md](docs/mur_sst.md) |
+| [download_argo.py](download_argo.py)       | Argo 剖面（默认南海）         | 全球 1997 至今；**南海实际只到 2022-04** | 离散剖面   | ~20 KiB（每剖面一个文件）  | [docs/argo.md](docs/argo.md)       |
+| [download_glorys.py](download_glorys.py)   | GLORYS12V1 再分析（默认南海） | 1993–2025                                     | 日均       | ~12.7 GB（南海全深度单年） | [docs/glorys.md](docs/glorys.md)   |
 
 ## 用法
 
