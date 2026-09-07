@@ -4,20 +4,24 @@
 
 ## 脚本清单
 
-| 脚本 | 数据集 | 单文件体积 | 说明 |
-| --- | --- | --- | --- |
-| [download_scsora.py](download_scsora.py) | SCSORA 逐日再分析 2001–2024 | ~172 GiB | [docs/scsora.md](docs/scsora.md) |
+| 脚本                                    | 数据集                       | 单文件体积 | 说明                            |
+| --------------------------------------- | ---------------------------- | ---------- | ------------------------------- |
+| [download_scsora.py](download_scsora.py) | SCSORA 逐日再分析 2001–2024 | ~172 GiB   | [docs/scsora.md](docs/scsora.md) |
 
 ## 用法
 
-```bash
+```powershell
+conda create -n data_download python=3.12
+conda activate data_download
 pip install -r requirements.txt
 
-cd D:\数据目录
-python F:\Code\data_download\download_scsora.py 2001
+python F:\Code\data_download\download_scsora.py 2001 -o "D:\数据目录"
 ```
 
-下载到**当前工作目录**，中断后重跑同样的命令续传。
+环境只需建一次，之后每次用前 `conda activate data_download` 即可。
+
+年份支持单个 `2001`、区间 `2001-2005` 或组合 `2001,2003-2005`；`-o` 指定输出目录，
+省略则下到当前工作目录。中断后重跑同样的命令续传。
 
 ## 备注
 
