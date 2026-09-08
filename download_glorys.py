@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""下载 GLORYS12V1 南海区域逐日再分析，按 ARCO 时间块合并请求以压低网络流量。
+"""下载 GLORYS12V1 南海区域逐日再分析，默认逐年直接落盘。
 
 数据走 copernicusmarine toolbox 从 ARCO(zarr) 裁剪，没有可直接 GET 的整年文件，
-因此不存在 SCSORA 那种 Range 续传。取而代之的关键优化是请求合并，见 CHUNK_BOUNDARY_YEARS。
+因此不存在 SCSORA 那种 Range 续传。可选 grouped 策略合并请求以省流量。
 """
 
 from __future__ import annotations
@@ -244,7 +244,7 @@ def split_by_year(source: Path, years: list[int], options: Options,
 
     written: list[Path] = []
     # 块文件可能有几十 GB，必须惰性读，不能整个载进内存
-    with xarray.open_dataset(source, chunks={"time": 31},
+    with xarray.open_dataset(source, chunks={},
                              decode_timedelta=False) as dataset:
         encoding = {name: transfer_encoding(dataset[name], options.compression)
                     for name in dataset.data_vars}
@@ -349,7 +349,7 @@ def show_plan(groups: list[list[int]], output_dir: Path, options: Options,
     print(f"数据集：{DATASET_ID}")
     print(f"区域：{west}-{east}°E, {south}-{north}°N   深度：{depth}")
     print(f"变量：{', '.join(options.variables)}")
-    print(f"计划处理 {total_years} 个年份，合并为 {len(groups)} 次请求\n")
+    print(f"计划处理 {total_years} 个年份，共 {len(groups)} 次请求\n")
     # 中文按两列显示，f-string 的宽度是按字符数算的，表头只能手工对齐
     print("请求时段      年份数        落盘      网络流量  待下年份")
 
@@ -388,8 +388,10 @@ def main() -> int:
         description="下载 GLORYS12V1 南海区域逐日再分析。",
         epilog=f"年份写法：2001 / 2001-2005 / 2001,2003-2005；"
                f"可用范围 {MIN_YEAR}-{MAX_YEAR}。"
-               f"同一个 ARCO 时间块内的年份会合并成一次请求以省流量。")
+               f"默认逐年下载；--strategy grouped 合并请求以省流量，但需要本地切分。")
     parser.add_argument("years", type=parse_years, help="单个年份、区间或它们的组合")
+    parser.add_argument("--strategy", choices=("yearly", "grouped"), default="yearly",
+                        help="yearly 逐年直下（默认）；grouped 合并请求后切分，节省网络流量")
     parser.add_argument("-o", "--output-dir", type=Path, default=Path.cwd(),
                         help="输出目录，默认当前工作目录")
     parser.add_argument("-n", "--dry-run", action="store_true",
@@ -428,7 +430,8 @@ def main() -> int:
     options = Options(bbox=(west, east, south, north), variables=args.variables,
                       min_depth=args.min_depth, max_depth=args.max_depth,
                       compression=args.compression)
-    groups = group_years(args.years)
+    groups = ([[year] for year in args.years] if args.strategy == "yearly"
+              else group_years(args.years))
 
     # toolbox 每次请求都要打一大段 INFO，交互式下载时留着看进度，dry-run 时纯噪音
     if args.dry_run:
