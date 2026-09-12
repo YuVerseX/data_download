@@ -4,17 +4,17 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 数据集覆盖 | 1993-01-01 – 2026-06-23（2026-09-07 实测） |
+| 数据集起点 | 1993-01-01；脚本仅处理下列支持年份 |
 | 时间分辨率 | 日均 |
-| 脚本可用范围 | 1993–2025（2026 非完整年，会让 time 维校验失效，不收） |
+| 脚本可用范围 | 1993–2025，由脚本 `MIN_YEAR` / `MAX_YEAR` 限定 |
 | 空间分辨率 | 1/12°（约 8 km），50 层 |
 | 默认区域 | 南海 105–125°E, 0–25°N |
 | 体积 | 落盘 12.7 GB/年（南海全深度 5 变量）；**网络流量另算，见「流量放大」** |
 
 ```powershell
-python F:\Code\data_download\download_glorys.py 2020 -o D:\GLORYS
-python F:\Code\data_download\download_glorys.py 2016-2020 -o D:\GLORYS
-python F:\Code\data_download\download_glorys.py 2001,2003-2005 -o D:\GLORYS
+python download_glorys.py 2020 -o D:\GLORYS
+python download_glorys.py 2016-2020 -o D:\GLORYS
+python download_glorys.py 2001,2003-2005 -o D:\GLORYS
 ```
 
 年份写法和 SCSORA 一致，可用范围 1993–2025。
@@ -27,9 +27,7 @@ python download_glorys.py 2001-2025 -o F:\GLORYS --strategy yearly
 python download_glorys.py 2001-2025 -o F:\GLORYS --strategy grouped
 ```
 
-从旧版切换：等当前块所有年份都打印“完成”后再 Ctrl-C，然后运行新命令。
-旧进程不会自动加载修改后的脚本。不要同时运行两个进程写同一输出目录。
-仅打印“切分”不代表年文件已经提交；旧版要整块切分完才统一校验和改名。
+不要同时运行两个进程写同一输出目录。
 不给 `-o` 就下到当前工作目录。**下之前先跑 `-n` 看流量**，理由见下面「流量放大」。
 
 默认下南海（105–125°E, 0–25°N）全深度 5 个变量。改范围用 `--bbox W E S N`、
@@ -40,9 +38,9 @@ python download_glorys.py 2001-2025 -o F:\GLORYS --strategy grouped
 ## 数据源
 
 Copernicus Marine Service，产品 `GLOBAL_MULTIYEAR_PHY_001_030`，
-数据集 `cmems_mod_glo_phy_my_0.083deg_P1D-m`，版本 `202311`（2026-09-07 实测）。
+数据集 `cmems_mod_glo_phy_my_0.083deg_P1D-m`，版本 `202311`。
 
-- 1/12°（约 8 km），50 层，日均，1993-01-01 至 2026-06-23
+- 1/12°（约 8 km），50 层，日均；脚本不自动扩展支持年份
 - 需要 CMEMS 账号：<https://data.marine.copernicus.eu/register>，
   然后 `copernicusmarine login` 一次，凭据存在 `~/.copernicusmarine/`
 - 走 `copernicusmarine` toolbox 从 ARCO(zarr) 裁剪，**没有可直接 GET 的整年文件**
@@ -62,15 +60,15 @@ Copernicus Marine Service，产品 `GLOBAL_MULTIYEAR_PHY_001_030`，
 脚本默认只下 `thetao so uo vo zos`。**海冰那 4 个在南海全是缺测**，要了纯浪费。
 `so` 的单位标 `1e-3` 是 CF 对实用盐度的写法，数值就是 33–35 那个量级，不用换算。
 
-## 流量放大——这个脚本存在的主要理由
+## 流量与空间
 
 ARCO 在时间维上分块存储，一块约 5.75 年。裁剪时块必须整块拉下来再切，
 所以**网络读取量可能远大于落盘体积**。dry-run 返回的 `data_transfer_size` 是估算值，
 不等于网卡实测流量，也不能直接按比例推算耗时。
 
-南海全深度 5 变量实测：
+南海全深度 5 变量的历史样本和工具箱网络估算（实际以 `-n` 为准）：
 
-| 请求 | 落盘 | 网络流量 | 放大 |
+| 请求 | 落盘样本 | 网络读取估算 | 比例 |
 |---|---|---|---|
 | 2020 单年 | 12.7 GB | 247.5 GiB | 20× |
 | 2016–2020 一次请求 | 61.8 GB | 247.5 GiB | 4× |
@@ -88,7 +86,7 @@ ARCO 在时间维上分块存储，一块约 5.75 年。裁剪时块必须整块
 ```
 
 间隔 6/6/5/6 年——块跨度不是整年，边界落在年中。脚本里是
-`CHUNK_BOUNDARY_YEARS` 常量。**数据集往后延伸会出现新边界（下一个约 2027），届时要重测。**
+`CHUNK_BOUNDARY_YEARS` 常量。数据集版本或分块变化时需重新检查，不能直接沿用边界。
 
 重测办法：对单变量逐年 dry-run，流量是基准值 2 倍的就是边界年。
 
@@ -103,7 +101,7 @@ copernicusmarine subset -i cmems_mod_glo_phy_my_0.083deg_P1D-m -v thetao `
 - 限深度：`-z 0 -Z 1000` 省 29%，只要表层 `-z 0 -Z 1` 省 96%
 - 缩小 bbox
 
-## 坑
+## 恢复与校验
 
 - **没有断点续传**。toolbox 是整块下完才落盘，中断了整块重来。已校验通过的年文件
   会被跳过，所以重跑同样的命令不会重下已完成的年，但失败的那一块要从头再来。
@@ -115,8 +113,7 @@ copernicusmarine subset -i cmems_mod_glo_phy_my_0.083deg_P1D-m -v thetao `
 - **切分要保留原始打包编码**。toolbox 下来的变量是 int16 + `scale_factor` 打包的，
   xarray 读进来解码成 float64，直接写回去文件会大三四倍。脚本里 `transfer_encoding()`
   负责把 dtype 和标度抄回去——改切分逻辑时别把这个丢了。
-- **2026 年数据只到 06-23**，不是完整年，会让「time 维长度等于该年天数」的校验失效，
-  所以 `MAX_YEAR` 卡在 2025。真要 2026 的数据得手工调 toolbox。
+- **脚本年份上限是 2025**。扩展前需核实源目录是否覆盖完整年，不能只修改上限绕过校验。
 
 ## 数据集本身
 

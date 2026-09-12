@@ -5,14 +5,28 @@ import argparse
 import calendar
 import datetime as dt
 import json
+import http.client
+import importlib.util
 import re
+import socket
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from pathlib import Path
-import numpy as np
-import xarray as xr
+from tqdm import tqdm
+
+
+def report(message, *, flush=False, file=None):
+    tqdm.write(message, file=file or sys.stdout)
+
+try:
+    import numpy as np
+    import xarray as xr
+except ModuleNotFoundError as exc:
+    raise SystemExit(f"Missing dependency {exc.name}; install with: python -m pip install numpy xarray netCDF4") from None
 
 BASE = "https://data.remss.com/ccmp/v03.1/"
 VARIABLES = ("uwnd", "vwnd", "nobs")
@@ -29,52 +43,110 @@ def validate_bbox(bbox):
             raise ValueError("bbox contains no CCMP 0.25 degree grid centres")
 
 
-def retry(operation, attempts=3):
+class TransferError(OSError):
+    """An incomplete HTTP body, safe to request again."""
+
+
+def error_detail(exc):
+    """Useful diagnostics without leaking proxy credentials or URL query strings."""
+    if isinstance(exc, TransferError):
+        return "incomplete body / Content-Length mismatch"
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        return "URL failure: " + error_detail(exc.reason)
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "read/connect timeout"
+    if isinstance(exc, ssl.SSLError):
+        return "TLS certificate/connection failure"
+    if isinstance(exc, socket.gaierror):
+        return "DNS lookup failure"
+    if isinstance(exc, OSError) and exc.errno:
+        return f"{type(exc).__name__} (errno {exc.errno})"
+    return type(exc).__name__
+
+
+class HttpClient:
+    def __init__(self, timeout=90, proxy=None):
+        self.timeout = timeout
+        if proxy is None:
+            self.opener = urllib.request.build_opener()
+            self.mode = "environment/system proxy settings"
+        elif proxy == "direct":
+            self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            self.mode = "explicit proxy disabled (system VPN/TUN may still apply)"
+        else:
+            parsed = urllib.parse.urlsplit(proxy)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError("--proxy requires an http(s) proxy URL or 'direct'")
+            self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+            self.mode = "explicit proxy configured"
+
+    def open(self, request):
+        return self.opener.open(request, timeout=self.timeout)
+
+
+def retry(operation, attempts=3, label="request"):
     for attempt in range(attempts):
         try:
             return operation()
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RuntimeError("RSS access denied; follow official registration instructions.") from exc
-            if exc.code in (400, 404) or attempt + 1 == attempts:
+            if exc.code not in (408, 429, 500, 502, 503, 504) or attempt + 1 == attempts:
                 raise
-        except (OSError, ValueError):
+            detail = error_detail(exc)
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead, TransferError) as exc:
+            if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, ssl.SSLCertVerificationError):
+                raise
             if attempt + 1 == attempts:
                 raise
-        print(f"Retry {attempt + 2}/{attempts}", flush=True)
+            detail = error_detail(exc)
+        report(f"Retry {attempt + 2}/{attempts}: {label}: {detail}", flush=True)
         time.sleep(min(2 ** attempt, 20))
 
 
-def listing(url, attempts):
+def listing(url, attempts, client=None):
+    client = client or HttpClient()
     def fetch():
-        with urllib.request.urlopen(url, timeout=60) as response:
+        with client.open(url) as response:
             return response.read(2 * 1024 * 1024).decode("utf-8")
-    return retry(fetch, attempts)
+    return retry(fetch, attempts, f"directory {urllib.parse.urlsplit(url).path}")
 
 
-def month_files(year, month, attempts):
+def month_files(year, month, attempts, client=None, cache=None):
+    key = (year, month)
+    if cache is not None and key in cache:
+        return cache[key]
     url = f"{BASE}Y{year}/M{month:02d}/"
     try:
-        text = listing(url, attempts)
+        text = listing(url, attempts, client)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
+            if cache is not None:
+                cache[key] = {}
             return {}
         raise
-    return {dt.datetime.strptime(day, "%Y%m%d").date(): url + f"CCMP_Wind_Analysis_{day}_V03.1_L4.nc"
-            for day in re.findall(PATTERN, text)}
+    result = {dt.datetime.strptime(day, "%Y%m%d").date(): url + f"CCMP_Wind_Analysis_{day}_V03.1_L4.nc"
+              for day in re.findall(PATTERN, text)}
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
-def latest_complete_year(attempts):
-    years = sorted({int(y) for y in re.findall(r"Y(\d{4})/", listing(BASE, attempts))}, reverse=True)
+def latest_complete_year(attempts, client=None, cache=None):
+    report("Discovering latest complete year from RSS directory...", flush=True)
+    years = sorted({int(y) for y in re.findall(r"Y(\d{4})/", listing(BASE, attempts, client))}, reverse=True)
     for year in years:
         if year >= dt.date.today().year:
             continue
         available = set()
-        for month in range(1, 13):
-            available.update(month_files(year, month, attempts))
+        for month in tqdm(range(1, 13), desc=f"Check {year}", unit="month", dynamic_ncols=True, disable=None):
+            report(f"Latest-year check {year}-{month:02d} [{month}/12]", flush=True)
+            available.update(month_files(year, month, attempts, client, cache))
         expected = {dt.date(year, 1, 1) + dt.timedelta(days=i) for i in range(365 + calendar.isleap(year))}
         if available == expected:
-            print(f"Latest complete year verified against all daily filenames: {year}")
+            report(f"Latest complete year verified against all daily filenames: {year}")
             return year
     raise ValueError("No complete calendar year found")
 
@@ -87,7 +159,7 @@ def requested_days(args):
     else:
         text = args.years or "2001-latest"
         if "latest" in text:
-            text = text.replace("latest", str(latest_complete_year(args.retries)))
+            text = text.replace("latest", str(latest_complete_year(args.retries, getattr(args, "client", None), getattr(args, "catalog_cache", None))))
         ranges = []
         for part in text.split(","):
             match = re.fullmatch(r"(\d{4})(?:-(\d{4}))?", part)
@@ -183,7 +255,7 @@ def save_product(ds, path, day, bbox, source, daily):
             validate(existing, day, bbox, daily)
             if existing.attrs.get("download_request") != fingerprint:
                 raise ValueError(f"Existing request mismatch; choose another output directory: {path}")
-        print(f"Skip validated file {path}", flush=True)
+        report(f"Skip validated file {path}", flush=True)
         return
     if ds is None:
         return False
@@ -209,7 +281,7 @@ def save_product(ds, path, day, bbox, source, daily):
     if path.exists():
         raise ValueError(f"Destination appeared while writing; refusing overwrite: {path}")
     temp.rename(path)
-    print(f"Saved {path} ({path.stat().st_size:,} bytes)", flush=True)
+    report(f"Saved {path} ({path.stat().st_size:,} bytes)", flush=True)
     return True
 
 
@@ -234,20 +306,29 @@ def process(day, url, args):
     else:
         def fetch():
             part = raw.with_suffix(".nc.part")
-            with urllib.request.urlopen(url, timeout=90) as response, part.open("wb") as stream:
+            client = getattr(args, "client", None) or HttpClient()
+            started = time.monotonic()
+            report(f"Downloading global source for {day}; regional crop follows full transfer", flush=True)
+            with client.open(url) as response, part.open("wb") as stream:
                 expected = response.headers.get("Content-Length")
+                expected = int(expected) if expected else None
                 total = 0
-                while chunk := response.read(1024 * 1024):
-                    stream.write(chunk)
-                    total += len(chunk)
-            if expected and total != int(expected):
-                raise ValueError("Download size differs from Content-Length")
+                with tqdm(total=expected, desc=str(day), unit="B", unit_scale=True,
+                          unit_divisor=1024, dynamic_ncols=True, disable=None,
+                          mininterval=getattr(args, 'progress_interval', .5), leave=False) as progress:
+                    while chunk := response.read(256 * 1024):
+                        stream.write(chunk)
+                        total += len(chunk)
+                        progress.update(len(chunk))
+            if expected is not None and total != expected:
+                raise TransferError("Download size differs from Content-Length")
+            report(f"Transfer complete: {total / 1024**2:.2f} MiB in {time.monotonic() - started:.1f}s; validating source...", flush=True)
             with xr.open_dataset(part) as check:
                 validate(check, day)
             if raw.exists():
                 raise ValueError("Global destination appeared while downloading; refusing overwrite")
             part.rename(raw)
-        retry(fetch, args.retries)
+        retry(fetch, args.retries, f"global file {day}")
     with xr.open_dataset(raw) as ds:
         subset = ds[list(VARIABLES)].sel(longitude=slice(*args.bbox[:2]), latitude=slice(*args.bbox[2:])).load()
         validate(subset, day, args.bbox)
@@ -270,48 +351,66 @@ def main(argv=None):
     parser.add_argument("--daily-mean", action="store_true", help="Also save UTC four-analysis daily mean")
     parser.add_argument("--keep-global", action="store_true", help="Keep validated global source (default: remove after crop)")
     parser.add_argument("--retries", type=int, default=3, help="Total attempts (default 3)")
+    parser.add_argument("--timeout", type=float, default=90, help="Socket connect/read timeout in seconds, not total transfer time (default 90)")
+    parser.add_argument("--proxy", help="HTTP(S) proxy URL; 'direct' disables explicit proxy; default uses environment/system settings")
+    parser.add_argument("--progress-interval", type=float, default=.5, help="Download progress refresh interval in seconds (default 0.5)")
     args = parser.parse_args(argv)
     try:
         validate_bbox(args.bbox)
         if args.retries < 1:
             raise ValueError("--retries must be >= 1")
+        if not np.isfinite(args.timeout) or args.timeout <= 0 or not np.isfinite(args.progress_interval) or args.progress_interval <= 0:
+            raise ValueError("--timeout and --progress-interval must be finite and > 0")
+        if not args.dry_run and importlib.util.find_spec("netCDF4") is None:
+            raise ModuleNotFoundError("Missing netCDF4; run: python -m pip install netCDF4")
+        if not args.dry_run:
+            importlib.import_module("netCDF4")
+        args.client = HttpClient(args.timeout, args.proxy)
+        args.catalog_cache = {}
+        report(f"Network: {args.client.mode}; socket timeout={args.timeout:g}s; attempts={args.retries}", flush=True)
         days = requested_days(args)
         files = {}
-        print("Checking RSS monthly directories (metadata only)...", flush=True)
-        for year, month in sorted({(d.year, d.month) for d in days}):
-            files.update(month_files(year, month, args.retries))
+        months = sorted({(d.year, d.month) for d in days})
+        report(f"Checking {len(months)} RSS monthly directories (metadata only; downloads start after this check)...", flush=True)
+        for index, (year, month) in enumerate(tqdm(months, desc="RSS catalogs", unit="month", dynamic_ncols=True, disable=None), 1):
+            cached = " (cached)" if (year, month) in args.catalog_cache else ""
+            report(f"Directory [{index}/{len(months)}] {year}-{month:02d}{cached}", flush=True)
+            files.update(month_files(year, month, args.retries, args.client, args.catalog_cache))
         missing = [str(d) for d in days if d not in files]
         if missing:
             raise ValueError(f"Missing {len(missing)} daily files; download not started. Examples: {missing[:8]}")
-        print(f"CCMP V3.1: {days[0]}..{days[-1]}, {len(days)} days, bbox W E S N={args.bbox}")
+        report(f"CCMP V3.1: {days[0]}..{days[-1]}, {len(days)} days, bbox W E S N={args.bbox}")
         if args.dry_run:
             def head():
-                with urllib.request.urlopen(urllib.request.Request(files[days[0]], method="HEAD"), timeout=60) as response:
+                with args.client.open(urllib.request.Request(files[days[0]], method="HEAD")) as response:
                     return int(response.headers.get("Content-Length", 0))
-            size = retry(head, args.retries)
-            print(f"First global day {size:,} bytes; rough network {size * len(days) / 1024**3:.3f} GiB (size varies).")
-            print("One global day at a time then crop; reserve >=100MiB temporary disk. Global files removed by default.")
-            print("Native 00/06/12/18 UTC preserved; daily mean=" + str(args.daily_mean))
+            size = retry(head, args.retries, f"HEAD {days[0]}")
+            report(f"First global day {size:,} bytes; rough network {size * len(days) / 1024**3:.3f} GiB (size varies).")
+            report("One global day at a time then crop; reserve >=100MiB temporary disk. Global files removed by default.")
+            report("Native 00/06/12/18 UTC preserved; daily mean=" + str(args.daily_mean))
             return 0
         args.output.mkdir(parents=True, exist_ok=True)
-        for index, day in enumerate(days, 1):
-            print(f"[{index}/{len(days)}] {day}", flush=True)
+        for index, day in enumerate(tqdm(days, desc="CCMP completed", unit="day", dynamic_ncols=True, disable=None), 1):
+            report(f"[{index}/{len(days)}] {day}", flush=True)
             process(day, files[day], args)
         return 0
     except KeyboardInterrupt:
-        print("Interrupted; completed files retained, current partial request will restart.", file=sys.stderr)
+        report("Interrupted by user/process signal (not a network diagnosis); completed files retained, partial transfer restarts on rerun.", file=sys.stderr)
         return 130
+    except ModuleNotFoundError as exc:
+        report(f"Dependency error: {exc}", file=sys.stderr)
+        return 1
     except urllib.error.HTTPError as exc:
-        print(f"HTTP error {exc.code}; no credentials or request URL printed.", file=sys.stderr)
+        report(f"HTTP error {exc.code}; no credentials or request URL printed.", file=sys.stderr)
         return 1
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"I/O failure: {type(exc).__name__}; retry the same command.", file=sys.stderr)
+    except (urllib.error.URLError, OSError, http.client.IncompleteRead) as exc:
+        report(f"I/O failure: {error_detail(exc)}. Check network/proxy for connection errors; disk/path for local I/O errors.", file=sys.stderr)
         return 1
-    except RuntimeError:
-        print("Runtime failure; verify NetCDF input and RSS access, then retry.", file=sys.stderr)
+    except RuntimeError as exc:
+        report(f"Runtime failure: {error_detail(exc)}; verify NetCDF input and RSS registration/access.", file=sys.stderr)
         return 1
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        report(f"Error: {exc}", file=sys.stderr)
         return 1
 
 

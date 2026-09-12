@@ -4,18 +4,18 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 数据集覆盖 | 2002-06-01 至今；2026-09-07 实测 8863 天，逐日连续零缺日 |
+| 数据集覆盖 | 2002-06-01 起；实际发布情况以源站为准 |
 | 时间分辨率 | 逐日，时间戳固定 09:00Z，近实时延迟约 1 天 |
 | 脚本可用范围 | 2002-06-01 至今，不给日期参数则默认今年 |
 | 空间分辨率 | 0.01° 全球网格，lat 17999 × lon 36000 |
 | 默认区域 | 南海 105–125°E, 0–25°N（2501 × 2001 格点） |
-| 体积 | 4.16 MiB/天，约 1.5 GiB/年，全量约 37 GiB |
+| 体积 | 默认区域样本约 4.16 MiB/天，约 1.5 GiB/年 |
 
 ```powershell
-python F:\Code\data_download\download_mur_sst.py -o "D:\MUR"                    # 默认今年
-python F:\Code\data_download\download_mur_sst.py 2020-2024 -o "D:\MUR"
-python F:\Code\data_download\download_mur_sst.py 20200101-20200630 -o "D:\MUR"
-python F:\Code\data_download\download_mur_sst.py 2020,2023-2024 -n -o "D:\MUR"  # 只看计划
+python download_mur_sst.py -o "D:\MUR"                    # 默认今年
+python download_mur_sst.py 2020-2024 -o "D:\MUR"
+python download_mur_sst.py 20200101-20200630 -o "D:\MUR"
+python download_mur_sst.py 2020,2023-2024 -n -o "D:\MUR"  # 只看计划
 ```
 
 日期粒度由位数决定：`2026` 整年、`2020-2024` 年区间、`202601` 或 `2026-01` 整月、
@@ -34,16 +34,16 @@ python F:\Code\data_download\download_mur_sst.py 2020,2023-2024 -n -o "D:\MUR"  
 单独存成一行文本放到 `%USERPROFILE%\.edl_token`。也可用 `--token-file` 或环境变量
 `EARTHDATA_TOKEN`（优先级：`--token-file` > 环境变量 > 默认路径）。
 
-token **有效期 60 天**，一个账号最多同时持有 2 个。脚本启动时会解码 JWT 的 `exp` 检查，
+token 有效期以签发信息为准。脚本启动时会解码 JWT 的 `exp` 检查，
 过期直接退出，7 天内到期打警告。**token 等同账号凭据，不要写进仓库或对话。**
 
 ## 数据源
 
-`MUR-JPL-L4-GLOB-v4.1`，2026-09-07 实测。
+`MUR-JPL-L4-GLOB-v4.1`。
 
 - Concept ID `C1996881146-POCLOUD`，DOI [10.5067/GHGMR-4FJ04](https://doi.org/10.5067/GHGMR-4FJ04)
 - 0.01° 全球网格，lat 17999 × lon 36000，逐日一个文件，时间戳固定 09:00Z
-- 覆盖 **2002-06-01 至今**，实测 8863 个 granule，**逐日连续、零缺日**（25 个年份逐年核对）
+- 覆盖起点 **2002-06-01**；所选日期是否已发布以实际请求结果为准
 - 近实时延迟约 1 天。请求尚未发布的日期返回 404，脚本标为"未发布"，不计失败
 - 只走 OPeNDAP 服务端裁剪，**必须用 DAP4**，默认的 DAP2 对这个数据集不工作
 
@@ -59,19 +59,13 @@ Cookbook 写的是 `(度数 + 90) / 0.01`，但维度长度是 17999 而非 1800
 
 ## 体积与耗时
 
-南海 `105,0,125,25` 是 2501 × 2001 格点，单日 **4.16 MiB / 6.5 秒**（实测）。
-完整一年约 1.5 GiB，全部 8863 天约 **37 GiB**。
+默认区域单日文件样本约 4.16 MiB，完整一年约 1.5 GiB。速度随网络和服务端负载变化。并发默认 4、上限 8，可用 `-j` 调整。
 
-并发默认 4、上限 8。实测 4 并发拉 4 天用 16 秒（串行需 26 秒），加速约 1.6 倍、非线性，
-服务端在排队，再加并发收益有限。
-
-## 坑
+## 下载限制
 
 - **响应是 `Transfer-Encoding: chunked`，没有 `Content-Length`，也不支持 Range**，
-  所以不能续传，失败只能整个重下（4 MB 而已，代价可忽略）。
-- **服务端不提供校验和**，完整性只能靠打开文件验证。而 **HDF5 魔数挡不住截断** ——
-  实测截断到 50%、90%、99% 的文件魔数全部正常，只有 h5py 打开时才会报
-  `truncated file`（superblock 里记录了文件应有长度）。所以 `h5py` 是必需依赖。
+  所以不能续传，失败只能整个重下。
+- 服务端不提供校验和；脚本通过 h5py 打开文件检查完整性，不能仅凭 HDF5 文件头判断下载成功。
 - **OPeNDAP 对失效 token 返回 HTTP 500 而不是 401**，光看状态码判断不出认证问题。
 - **DAP4 响应会丢数据集级全局属性**（`title`、`Conventions`、`source` 等）。变量级属性
   （`scale_factor`、`add_offset`、`_FillValue`）都保留。需要溯源元数据得另存 DMR。
@@ -83,5 +77,5 @@ Cookbook 写的是 `(度数 + 90) / 0.01`，但维度长度是 17999 而非 1800
 - `time` 单位 `seconds since 1981-01-01 00:00:00 UTC`
 - 引用要求见 <https://podaac.jpl.nasa.gov/CitingPODAAC>，正式发表按 DOI 引用
 
-需要全球整文件（约 700 MB/天、全量 3.8 TiB）时，用官方的
+需要全球整文件时，用官方的
 [podaac-data-subscriber](https://github.com/podaac/data-subscriber)，本脚本不做这件事。

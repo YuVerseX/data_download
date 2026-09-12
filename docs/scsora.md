@@ -11,9 +11,9 @@
 | 体积 | 171.8 GiB/年，全量约 4.0 TiB |
 
 ```powershell
-python F:\Code\data_download\download_scsora.py 2001 -o D:\SCSORA
-python F:\Code\data_download\download_scsora.py 2001-2005 -o D:\SCSORA
-python F:\Code\data_download\download_scsora.py 2001,2003-2005 -o D:\SCSORA
+python download_scsora.py 2001 -o D:\SCSORA
+python download_scsora.py 2001-2005 -o D:\SCSORA
+python download_scsora.py 2001,2003-2005 -o D:\SCSORA
 ```
 
 年份可以是单个 `2001`、区间 `2001-2005`，或两者组合 `2001,2003-2005`，可用范围 2001–2024。
@@ -23,7 +23,7 @@ python F:\Code\data_download\download_scsora.py 2001,2003-2005 -o D:\SCSORA
 
 ## 数据源
 
-<https://www.hellosea.org.cn/SCSORA/>（2026-09-07 实测）
+<https://www.hellosea.org.cn/SCSORA/>
 
 - `SCSORA_daily_{YYYY}.nc`，2001–2024 共 24 个，无缺年
 - 单文件 `184476652676` 字节 ≈ **171.8 GiB**，24 个全量约 4.0 TiB

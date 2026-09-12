@@ -4,7 +4,8 @@ from __future__ import annotations
 import argparse
 import calendar
 from datetime import date, datetime, timedelta, timezone
-import importlib.util
+import importlib
+import errno
 import json
 import logging
 import math
@@ -12,6 +13,8 @@ from pathlib import Path
 import re
 import sys
 import time
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 DATASET = "reanalysis-era5-single-levels"
 CATALOGUE = f"https://cds.climate.copernicus.eu/api/catalogue/v1/collections/{DATASET}"
@@ -27,6 +30,47 @@ DAILY_CELL_METHODS = "time: mean (interval: 1 day)"
 class DownloadError(ValueError):
     pass
 
+def failure_details(exc):
+    """Return an actionable, credential-safe diagnosis and retry decision."""
+    import requests
+    if isinstance(exc, DownloadError):
+        return str(exc), False
+    if isinstance(exc, ModuleNotFoundError):
+        name = exc.name if exc.name and re.fullmatch(r"[A-Za-z0-9_.]+", exc.name) else "dependency"
+        return f"Missing Python module {name}; use this Python's -m pip install -r requirements.txt", False
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        if status in (401, 403):
+            return f"HTTP {status}: check CDS credentials and accept this dataset's licence", False
+        if status in (408, 425, 429, 500, 502, 503, 504):
+            return f"HTTP {status}: temporary CDS service/rate-limit failure", True
+        return f"HTTP {status}: CDS rejected the request; check dataset/request availability", False
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "TLS certificate failure; check proxy certificates and system clock", False
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return "Proxy connection failed; check this terminal's HTTP_PROXY/HTTPS_PROXY and proxy listener", True
+    if isinstance(exc, (requests.exceptions.Timeout, TimeoutError)):
+        return "Network request timed out (this is not a CDS queue time limit)", True
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError, ConnectionError)):
+        return "Network connection interrupted; check connectivity/proxy and retry", True
+    if isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EACCES, errno.EROFS, errno.ENOENT):
+        return f"Local filesystem failure ({errno.errorcode[exc.errno]}); check output path, space and permissions", False
+    return f"{type(exc).__name__}: local processing or CDS client failure; check dependencies, credentials and request settings", False
+
+def preflight(dry_run=False):
+    modules = ("requests",) if dry_run else ("requests", "numpy", "xarray", "netCDF4", "cdsapi")
+    missing = []
+    for name in modules:
+        try:
+            importlib.import_module(name)
+        except ImportError:
+            missing.append(name)
+        except Exception as exc:
+            raise DownloadError(f"Cannot load dependency {name} ({type(exc).__name__}); repair the active Python environment") from None
+    if missing:
+        raise DownloadError(f"Missing/unusable dependencies: {', '.join(missing)}. In this terminal run: python -m pip install -r requirements.txt")
+
 def parse_years(text):
     result = set()
     for part in text.split(","):
@@ -39,18 +83,20 @@ def parse_years(text):
         result.update(range(first, last + 1))
     return sorted(result)
 
-def discover(retries=3):
+def discover(retries=3, timeout=60):
     import requests
     for attempt in range(retries):
         try:
-            response = requests.get(CATALOGUE, timeout=60)
-            response.raise_for_status()
-            metadata = response.json()
+            with requests.get(CATALOGUE, timeout=timeout) as response:
+                response.raise_for_status()
+                metadata = response.json()
             first, last = metadata["extent"]["temporal"]["interval"][0]
             return date.fromisoformat(first[:10]), date.fromisoformat(last[:10]), metadata.get("updated", "unknown")
         except Exception as exc:
-            if attempt + 1 == retries:
-                raise DownloadError(f"CDS catalogue unavailable ({type(exc).__name__}); no guessed latest year") from None
+            details, retryable = failure_details(exc)
+            if not retryable or attempt + 1 == retries:
+                raise DownloadError(f"CDS catalogue unavailable: {details}; no guessed latest year") from None
+            LOG.warning("Catalogue attempt %d/%d failed: %s; retrying", attempt + 1, retries, details)
             time.sleep(min(2 ** attempt, 10))
 
 def ranges(args, coverage_start, coverage_end):
@@ -201,7 +247,7 @@ def status_callback(message, *args, **kwargs):
             text = text % args
         except (TypeError, ValueError):
             return
-    found = re.search(r"(?:status|state).*?\b(accepted|queued|running|successful|completed|failed)\b", text, re.I)
+    found = re.search(r"(?:status|state|request is).*?\b(accepted|queued|running|successful|completed|failed)\b", text, re.I)
     if found:
         LOG.info("CDS task state: %s", found[1].lower())
 
@@ -242,6 +288,7 @@ def commit(data, path, first, last, bbox, kind):
     if path.exists():
         raise DownloadError("Output appeared during download; refusing overwrite")
     temporary.rename(path)
+    LOG.info("Saved %s", path)
 
 def download_chunk(client, path, first, last, bbox, retries):
     import xarray as xr
@@ -263,9 +310,10 @@ def download_chunk(client, path, first, last, bbox, retries):
                 # A concurrent writer or a cleanup failure must never cause overwrite.
                 if check_existing(path, first, last, bbox, "hourly"):
                     return
-            LOG.warning("CDS chunk failed (%s); completed chunks retained", type(exc).__name__)
-            if attempt + 1 == retries:
-                raise DownloadError("CDS download failed; verify credentials, accepted licence and service status") from None
+            details, retryable = failure_details(exc)
+            if not retryable or attempt + 1 == retries:
+                raise DownloadError(f"CDS chunk {first}..{last} failed: {details}; completed chunks retained") from None
+            LOG.warning("CDS chunk %s..%s attempt %d/%d failed: %s; retrying", first, last, attempt + 1, retries, details)
             time.sleep(min(2 ** attempt, 20))
 
 def parser():
@@ -278,9 +326,10 @@ def parser():
     p.add_argument("-n", "--dry-run", action="store_true")
     p.add_argument("--daily-mean", action="store_true", help="Also generate UTC daily W m-2; needs adjacent day")
     p.add_argument("--retries", type=int, default=3, help="Maximum total attempts per catalogue/chunk request (>=1)")
+    p.add_argument("--timeout", type=float, default=60, help="HTTP request timeout in seconds; does not limit CDS queue/job time")
     return p
 
-def main(argv=None):
+def _main(argv=None):
     args = parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
@@ -291,7 +340,10 @@ def main(argv=None):
             raise DownloadError("Use bbox boundaries aligned to the 0.25-degree grid")
         if args.retries < 1:
             raise DownloadError("retries must be >=1 (maximum total attempts)")
-        first, last, updated = discover(args.retries)
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise DownloadError("timeout must be finite and >0")
+        preflight(args.dry_run)
+        first, last, updated = discover(args.retries, args.timeout)
         selected = ranges(args, first, last)
         # Merge adjacent years before chunking, avoiding duplicate boundary-day requests.
         merged = []
@@ -311,25 +363,24 @@ def main(argv=None):
             LOG.info("Dry-run: only public catalogue queried; no CDS job submitted or data downloaded")
             LOG.info("First request: %s", json.dumps(cds_request(*chunks[0], args.bbox)))
             return 0
-        if importlib.util.find_spec("cdsapi") is None:
-            raise DownloadError("Missing cdsapi>=0.7.7; install project dependencies in your chosen environment")
         import cdsapi
         try:
-            client = cdsapi.Client(quiet=True, debug=False, retry_max=1, sleep_max=10,
+            client = cdsapi.Client(quiet=True, debug=False, retry_max=1, sleep_max=10, timeout=args.timeout,
                                    info_callback=status_callback, warning_callback=suppressed_callback,
                                    error_callback=suppressed_callback, debug_callback=suppressed_callback)
         except Exception:
             raise DownloadError("CDS authentication unavailable; configure ~/.cdsapirc or CDSAPI_URL/CDSAPI_KEY and accept dataset terms") from None
         args.output_dir.mkdir(parents=True, exist_ok=True)
+        LOG.info("CDS requests can queue before transfer; timeout applies to HTTP only. Ctrl+C retains completed files.")
         paths = []
-        for start, end in chunks:
+        for start, end in tqdm(chunks, desc="ERA5 completed", unit="chunk", dynamic_ncols=True, disable=None):
             path = args.output_dir / f"era5_flux_hourly_{start}_{end}.nc"
             download_chunk(client, path, start, end, args.bbox, args.retries)
             paths.append((start, end, path))
         if args.daily_mean:
             import xarray as xr
             for begin, finish in merged:
-                for start, end in month_chunks(begin, finish):
+                for start, end in tqdm(list(month_chunks(begin, finish)), desc="ERA5 daily mean", unit="month", dynamic_ncols=True, disable=None):
                     path = args.output_dir / f"era5_flux_daily_{start}_{end}.nc"
                     if check_existing(path, start, end, args.bbox, "daily"):
                         continue
@@ -348,8 +399,19 @@ def main(argv=None):
         LOG.error("Interrupted; verified completed files retained")
         return 130
     except Exception as exc:
-        LOG.error("Operation failed (%s); details suppressed to protect credentials", type(exc).__name__)
+        # Do not print raw exception strings: CDS can include keys/signed URLs.
+        if isinstance(exc, ImportError):
+            LOG.error("Dependency import failed (%s); run python -m pip install -r requirements.txt", type(exc).__name__)
+        else:
+            details, _ = failure_details(exc)
+            LOG.error("Operation failed: %s", details)
         return 1
+
+def main(argv=None):
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    with logging_redirect_tqdm():
+        return _main(argv)
+
 
 if __name__ == "__main__":
     sys.exit(main())

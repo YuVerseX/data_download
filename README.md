@@ -1,62 +1,54 @@
 # data_download
 
-各类科研数据集的下载脚本，一个数据源一个脚本。
+科研数据下载脚本，一个数据源一个脚本。命令在仓库根目录运行，具体参数见对应文档或 `python <脚本名> --help`。
 
 ## 脚本清单
 
-| 脚本                                      | 数据集                        | 时间范围                                       | 时间分辨率 | 单文件体积                 | 说明                              |
-| ----------------------------------------- | ----------------------------- | ---------------------------------------------- | ---------- | -------------------------- | --------------------------------- |
-| [download_scsora.py](download_scsora.py)   | SCSORA 再分析                 | 2001–2024                                     | 逐日       | ~172 GiB（每年一个文件）   | [docs/scsora.md](docs/scsora.md)   |
-| [download_mur_sst.py](download_mur_sst.py) | MUR L4 海表温度（默认南海）   | 2002-06-01 至今                                | 逐日       | ~4 MiB（每天一个文件）     | [docs/mur_sst.md](docs/mur_sst.md) |
-| [download_argo.py](download_argo.py)       | Argo 剖面（默认南海）         | 全球 1997 至今；**南海实际只到 2022-04** | 离散剖面   | ~20 KiB（每剖面一个文件）  | [docs/argo.md](docs/argo.md)       |
-| [download_glorys.py](download_glorys.py)   | GLORYS12V1 再分析（默认南海） | 1993–2025                                     | 日均       | ~12.7 GB（南海全深度单年） | [docs/glorys.md](docs/glorys.md)   |
-| [download_duacs.py](download_duacs.py) | DUACS L4 海平面与地转流（默认南海） | 默认 2001 至最新完整年（本次为 2025） | 逐日 | ~93 MiB（南海七变量单年，样本值） | [docs/duacs.md](docs/duacs.md) |
+| 脚本 | 数据集 | 脚本支持的时间选择 | 时间含义 | 文档 |
+| --- | --- | --- | --- | --- |
+| [download_scsora.py](download_scsora.py) | SCSORA 再分析 | 2001–2024 | 逐日，按年保存 | [SCSORA](docs/scsora.md) |
+| [download_mur_sst.py](download_mur_sst.py) | MUR L4 海表温度 | 2002-06-01 起；默认当年 | 逐日 | [MUR SST](docs/mur_sst.md) |
+| [download_argo.py](download_argo.py) | Argo 剖面 | 按索引、区域和年份筛选 | 离散剖面 | [Argo](docs/argo.md) |
+| [download_glorys.py](download_glorys.py) | GLORYS12V1 再分析 | 1993–2025 | 日均，按年保存 | [GLORYS](docs/glorys.md) |
+| [download_duacs.py](download_duacs.py) | DUACS L4 海平面与地转流 | 默认 2001 起至目录最新完整年 | 逐日，按年保存 | [DUACS](docs/duacs.md) |
+| [download_cci_sss.py](download_cci_sss.py) | ESA CCI SSS v5.5 海表盐度 | 年份或日期区间；逐日检查源目录 | **七天滑动平均，逐日采样** | [CCI SSS](docs/cci_sss.md) |
+| [download_ccmp.py](download_ccmp.py) | RSS CCMP v3.1 海表风场 | 默认 2001 起至目录最新完整年 | 每天四个分析时次，可另存日均 | [CCMP](docs/ccmp.md) |
+| [download_era5_flux.py](download_era5_flux.py) | ERA5 海表热通量 | 默认 2001 起至可用的完整最终 ERA5 年 | 小时累计能量，可另存日均通量 | [ERA5](docs/era5_flux.md) |
 
-## 新增海表输入与热通量
+时间选择不代表所选区域每天都有有效观测。输出大小、网络流量和数据覆盖限制见各产品文档。
 
-新增下载器共用 `--bbox W E S N`（西、东、南、北），默认 `105 125 0 25`；支持 `-n/--dry-run`、`-o/--output-dir`、年份选择或 `--start-date` / `--end-date`。默认起点为 2001 年与产品实际起点的较晚者，截止时间按运行时官方目录核查的完整年选择，不补造缺年。
-
-| 脚本 | 用途 | 产品与时间语义 | 文档 |
-| --- | --- | --- | --- |
-| [download_cci_sss.py](download_cci_sss.py) | 海表盐度输入 | ESA CCI SSS v5.5，7 日平均、逐日采样，0.25°网格；有效空间分辨率约 50 km | [docs/cci_sss.md](docs/cci_sss.md) |
-| [download_ccmp.py](download_ccmp.py) | 海表风矢量输入 | RSS CCMP v3.1，0.25°，UTC 00/06/12/18 四个分析时次；可另存本地日均 | [docs/ccmp.md](docs/ccmp.md) |
-| [download_era5_flux.py](download_era5_flux.py) | 热收支约束辅助变量 | ERA5 单层逐小时四项热通量累计量；可另存按 UTC 日积分转换的 W/m² 日均 | [docs/era5_flux.md](docs/era5_flux.md) |
-
-CCI 的逐日输出不是每日独立观测。CCMP 使用卫星观测与 ERA5 背景场融合，不能因平台不同就认为独立。ERA5 原始累计量与本地日均通量分开保存。SSS 是海表盐度；DUACS 的 SLA 是海平面异常，不包含 SSS。海陆缺测与质量标识按上游语义保留。
-
-本次仅开发和小样本验证，**正式下载尚未启动**。测试数据、测试脚本和汇总验证报告已按要求删除。三个下载器的命令、认证前置条件及空间估算见上表各产品文档。既有脚本不代表对应全时段数据已经下载完成；上表 Argo 截至 2022 年的历史表述仅来自一次区域索引筛选，不能推广为整个南海此后没有观测。新增下载器默认区域与 GLORYS、DUACS 一致；CCI/CCMP与ERA5格点中心不同，建模前需显式对齐。MUR的bbox为逗号分隔的西、南、东、北；Argo为逗号分隔的西、东、南、北，且默认区域仍是105–121E、2–25N，请查看各自帮助。
-
-## 用法
+## 安装与运行
 
 ```powershell
 conda create -n data_download python=3.12
 conda activate data_download
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
-python F:\Code\data_download\download_scsora.py 2001 -o "D:\数据目录"
-python F:\Code\data_download\download_mur_sst.py 2020-2024 -o "D:\数据目录"
+# 查看计划
+python download_cci_sss.py --start-date 2011-01-01 --end-date 2023-12-30 -n
+
+# 下载；输出路径按需修改
+python download_cci_sss.py --start-date 2011-01-01 --end-date 2023-12-30 --bbox 105 125 0 25 --out "F:\cci_sss"
+python download_ccmp.py 2001-latest --bbox 105 125 0 25 --daily-mean -o "F:\CCMP"
 ```
 
-环境只需建一次，之后每次用前 `conda activate data_download` 即可。
+环境只需创建一次。后续激活 `data_download` 后运行；`-n/--dry-run` 查看计划，`-o` 指定输出目录。首次使用建议先下载一个日期或最小分块，确认认证、下载与保存成功。
 
-年份支持单个 `2001`、区间 `2001-2005` 或组合 `2001,2003-2005`；`-o` 指定输出目录，
-省略则下到当前工作目录。中断后重跑同样的命令续传。
+## 认证
 
-各脚本的参数不一样，`--help` 或对应的 `docs/<脚本名>.md` 里有。
+| 数据源 | 准备 |
+| --- | --- |
+| MUR SST | Earthdata Login token，默认读取 `%USERPROFILE%\.edl_token`，见 [认证说明](docs/mur_sst.md#认证) |
+| GLORYS、DUACS | Copernicus Marine 账号，运行 `copernicusmarine login` |
+| ERA5 | CDS 账号、数据集条款及 `.cdsapirc`，见 [ERA5 文档](docs/era5_flux.md) |
+| SCSORA、Argo、CCI、CCMP | 脚本使用公开下载入口；使用许可与引用见各文档 |
 
-**MUR SST 需要先配好 Earthdata Login 的 token**（存到 `%USERPROFILE%\.edl_token`），
-见 [docs/mur_sst.md](docs/mur_sst.md#认证)。token 等同账号凭据，不要入库。
+## 区域与恢复
 
-**GLORYS12V1 需要 CMEMS 账号**，跑一次 `copernicusmarine login` 即可。
-它的网络流量远大于落盘体积（南海全深度单年 12.7 GB 数据要拉 247 GiB），
-默认逐年直下，不再本地切分；`--strategy grouped` 可合并请求以省流量。
-下之前务必先跑 `-n` 看流量。它也**不支持断点续传**——中断了当前请求要重来，
-但已下好的年份会跳过。详见 [docs/glorys.md](docs/glorys.md)。
+- GLORYS、DUACS、CCI、CCMP、ERA5 使用空格分隔的 `--bbox 西 东 南 北`，默认 `105 125 0 25`；允许的经度范围以各脚本为准。
+- MUR 使用逗号分隔的 `--bbox 西,南,东,北`；Argo 使用 `--bbox 西,东,南,北`，默认 `105,121,2,25`。
+- 不同产品的格点中心与时间平均方式不同，联合使用前需按坐标和时间对齐。
+- 中断后重跑相同命令。SCSORA 支持字节续传；其余脚本跳过已完成文件，未完成文件或分块重新下载。具体校验方式见各文档。
+- 网络流量可能远大于最终输出：CCMP 先下载全球日文件再裁剪，GLORYS、DUACS 受服务端分块影响。长时段下载前先查看计划和空间需求。
 
-## 备注
-
-**DUACS 同样使用 CMEMS 账号**，默认逐年下载。先运行 `python download_duacs.py 2001-2025 -n` 预估流量；去掉 `-n` 并加 `-o "F:\DUACS"` 开始下载。完整年文件校验后跳过，未完成年份重下。
-
-- 数据文件不入库，已在 [.gitignore](.gitignore) 排除
-- 第三方依赖记在 [requirements.txt](requirements.txt)，注明所属脚本
-- 数据源的细节和坑写进 `docs/<脚本名>.md`
+数据及凭据不入库，忽略规则见 [.gitignore](.gitignore)，依赖见 [requirements.txt](requirements.txt)。

@@ -1,54 +1,46 @@
 # ESA CCI 海表盐度
 
-2026-09-12 复查：本次验证样本及测试脚本已按用户要求删除，下文路径、体积和测试结果仅为历史验证记录。默认区域实际格点中心为经度105.125..124.875（80点）、纬度0.125..24.875（100点），全部位于请求框内。默认计划在选定最新完整年后严格检查整个区间，区间内部任何缺日/缺年都会报错，不能静默跳过；质量标识和观测数还校验无量纲、整数及产品有效范围。
+下载 CEDA 的 ESA CCI SSS v5.5、L4、GLOBALv5.5/7days。**七天滑动平均，每天采样一次，不是单日均值。** 保留源数值、单位、缺测和质量标识，不插值、不额外平均。
 
-`download_cci_sss.py` 下载官方 CEDA 发布的 ESA CCI SSS **v5.5、L4、GLOBALv5.5/7days**。2026-09-12 实查目录最高发布版本为 v05.5。目录年份为 2010–2023，但逐日文件实际从 **2010-01-09 至 2023-12-30**，2023 缺 12 月 31 日，因此此产品的最新完整日历年为 **2022**。程序每次执行重新读取目录并核查逐日文件，不把目录年份直接当完整年，也不补造文件。
+## 运行
 
-默认无日期参数与 `--all-available` 均选择产品起始日至服务端最新完整年；本次核查为 2010-01-09 至 2022-12-31。明确请求 2010 全年或 2023 全年会因缺日期报错。若科研需要 2023 已有部分，可另指定截止 2023-12-30。
-
-## 变量与科学语义
-
-- `sss`：盐度；`sss_random_error`：随机误差，源单位均为 `0.001`，保留数值与原单位，不再乘除 1000。
-- `noutliers`：格点内异常观测数；`total_nobs`：时间窗口内 SSS 观测数。
-- `pct_var`：产品未解释的 SSS 变率百分比，单位 `%`。
-- `sss_qc`、`lsc_qc`、`isc_qc`：盐度质量、陆地污染、海冰污染标识；实际属性规定 0=Good、1=Bad。
-
-八个变量全部保存。海陆缺测 NaN 保留，不当作坏文件；不自动删除质量不良点，便于研究时按用途建立掩膜。有效观测支持数不能解释成每日独立观测数。
-
-源全球规则网格 720×1440，格点中心间隔 0.25°，经度 -179.875 至 179.875、纬度 -89.875 至 89.875。源属性标明有效空间分辨率 **50 km**；0.25°重采样不提高实际分辨率。产品是 **7 日滑动平均、每日一个采样**，不是每日独立观测。本地不额外平均、插值或伪造逐日观测。多卫星来源 SMOS、Aquarius、SMAP，未新增其他盐度数据源。
-
-2023-01-01 样本 time=2023-01-01 00:00:00；源 `time_coverage_duration=P7D`、`time_coverage_resolution=P1D`。源 start/end 却写 `20221228T000000Z` 和 `20230104T235959Z`，与 P7D 的精确边界存在不一致；本脚本原样保留，不能据此自行推算或修正精确权重。源 `id` 后缀写 fv5.3，而下载目录、文件名及 `product_version` 均为 5.5；保留该源属性并用独立溯源属性记录真实URL和版本。
-
-## 使用
-
-依赖 requests、numpy、xarray、netCDF4、pydap。CEDA 此目录为公开访问，本次不需要账号。pydap 使用 requests 网络配置，解决本地 netCDF4/libcurl 直连 OPeNDAP I/O 失败。不会自动回退全球下载。
+在运行脚本的同一个 Python 环境安装依赖：
 
 ```powershell
-# 只查询小型 XML 目录，不下载场数据；输出当前完整年覆盖与估算
-python download_cci_sss.py --all-available --dry-run
-# 小样本；bbox 始终 WEST EAST SOUTH NORTH
-python download_cci_sss.py --start-date 2023-01-01 --end-date 2023-01-01 --bbox 110 111 10 11 --out data/validation/cci_sss
-# 正式命令由用户自行执行；执行时重新检查完整年覆盖
-python download_cci_sss.py --all-available --bbox 105 125 0 25 --out "<正式输出目录>/cci_sss"
-# 或选择完整历史年份
-python download_cci_sss.py 2011-2022 --bbox 105 125 0 25 --out "<正式输出目录>/cci_sss"
+python -m pip install "requests>=2.31" "numpy>=1.26" "xarray>=2024.10" "netCDF4>=1.6" "pydap>=3.5" "tqdm>=4.66"
+
+# 先下载一天，检查出现 SAVED
+python download_cci_sss.py --start-date 2011-01-01 --end-date 2011-01-01 --bbox 105 125 0 25 --out "F:\cci_sss"
+
+# 下载指定覆盖；相同目录下完整文件会校验后跳过
+python download_cci_sss.py --start-date 2011-01-01 --end-date 2023-12-30 --bbox 105 125 0 25 --out "F:\cci_sss"
 ```
 
-支持 `--years 2011-2022`、`-n/--dry-run`、`-o/--output-dir/--out`、`--retries`（含首次在内总尝试次数，默认 3）、`--timeout`（每次网络请求秒数）。不跨经度180°，经度范围 -180..180。
+2026-09-12 核对的 v5.5 目录，2023 年仅到 12 月 30 日。使用 `2011-2023` 会严格要求 2023-12-31，因缺日停止；不会悄悄跳过。日期首尾包含，`--years`/位置年份与日期参数二选一。无日期参数或 `--all-available` 从产品实际起点选到最新完整日历年，仍检查内部所有日期。
 
-OPeNDAP 服务端按区域切片，只传八个变量的区域数组、坐标和元数据，不拉全球原文件。每个日期单独写 `.nc.part`，完整校验变量、单位、坐标、精确时间、时间窗口、版本及全部数据可读性后同目录原子改名。有效文件重跑跳过；既有请求或 bbox 不同会拒绝覆盖，请换输出目录。中断后单日重试，不支持字节续传；每次只处理一个临时文件。源科学属性、下载UTC时间、来源URL、请求和处理方式保存在输出属性。
+`-n/--dry-run` 只检查目录和计划，不下载数据。`--timeout 120` 设置每次网络请求超时秒数；`--retries 3` 为包括首次在内的总尝试次数。临时网络错误重试，缺依赖、数据校验和磁盘错误直接给出原因。
 
-## 验证与成本
+默认使用环境代理；`--proxy direct` 禁用显式代理，或 `--proxy http://127.0.0.1:10808` 指定代理。TUN 模式仍可能接管直连流量。
 
-2026-09-12 已通过：小样本 dry-run、2023-01-01 的110–111°E/10–11°N服务端裁剪真实下载、八变量读取、重跑 SKIP；4×4格点盐度均值约32.64625。文件为 `data/validation/cci_sss/2023/ESACCI-SEASURFACESALINITY-L4-SSS-GLOBAL-MERGED_OI_7DAY_RUNNINGMEAN_DAILY_0.25deg-20230101-fv5.5.nc`，**36,196 bytes**。另有离线恢复、原子提交、请求冲突、无穷值/单位/时间错误及海陆NaN测试。
+## 数据与保存
 
-默认区域100×80=8,000格点；网络 DAP2 数组约224,000 bytes/日（整数填充使线传近似28 bytes/格点），还需坐标、XML、DDS/DAS和HTTP开销。2010-01-09至2022-12-31共4,740文件，区域数值传输约1.0 GiB，实际总网络量更高；落盘约0.8–1.2 GiB为估算，未做全量实测。每文件开销在小样本占比很高，不能用4×4文件大小按面积直接外推。单日临时区域文件约0.2 MB，加内存中的区域数据；不需要缓存数十GiB全球文件。dry-run 同时列出原全球压缩文件目录体积作对照，目录大小有舍入误差。
+交互终端显示目录检查与逐日完成进度条（完成数、耗时、预计剩余时间）；重定向日志时自动关闭动态条。完成数包含校验后跳过的已有文件。
 
-本次未启动正式或后台下载。
+- `--bbox` 顺序为西、东、南、北，经度 -180..180，不跨日期变更线。按格点中心裁剪，不补造边界。
+- 默认区域为经度 105.125..124.875（80 点）、纬度 0.125..24.875（100 点）。网格间距 0.25°，源有效分辨率约 50 km。
+- 保存 `sss`、`sss_random_error`、`noutliers`、`total_nobs`、`pct_var`、`sss_qc`、`lsc_qc`、`isc_qc`。盐度及误差单位 `0.001` 保持原样，不乘除 1000；质量标识 0=Good、1=Bad。
+- 部分整数变量没有显式 `_FillValue`，实际使用 NetCDF 默认缺测码（int16 为 -32767，int8 为 -127）。脚本将这些码解码为缺测并在输出明确记录；其他非法负数仍报错。不会把缺测质量标识变成 Good。
+- 一天的八个变量合并为一个 DAP2 区域请求，另请求一次属性，不下载全球文件。日志显示日期进度、收到的字节、保存结果，不再逐条打印底层 URL。
+- 每日保存到年份目录。先写 `.nc.part`，重开验证时间、坐标、变量、单位、版本与数据后改名；已有文件不匹配或损坏时停止，避免覆盖。
+- 重跑校验并跳过完整日文件；未完成的一天从头下载。不要同时向同一目录运行多个实例。
+
+源 `P7D` / `P1D` 时间语义及科学属性保留。个别文件的源 start/end 或 id 与产品描述不一致，脚本不擅自修正，另记录实际来源和请求。
+
+2011-01-01 至 2023-12-30 共 4747 个日期，默认区域数值传输约 1 GiB，加上目录、坐标和属性开销。实际大小随编码变化；不需要缓存约 24 GiB 全球原件。
 
 ## 官方依据
 
-- CEDA 数据版本目录：<https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/catalog.html>
-- v5.5 7days 年份目录：<https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/catalog.html>
-- 实际样本DDS/DAS元数据：<https://data.cci.ceda.ac.uk/thredds/dodsC/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/2023/ESACCI-SEASURFACESALINITY-L4-SSS-GLOBAL-MERGED_OI_7DAY_RUNNINGMEAN_DAILY_0.25deg-20230101-fv5.5.nc.das>
-- ESA发布说明：<https://climate.esa.int/en/news-events/Sea-Surface-Salinity-Record-Extended/>
+- CEDA 数据版本目录：[https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/catalog.html](https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/catalog.html)
+- v5.5 7days 年份目录：[https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/catalog.html](https://data.cci.ceda.ac.uk/thredds/catalog/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/catalog.html)
+- 实际样本DDS/DAS元数据：[https://data.cci.ceda.ac.uk/thredds/dodsC/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/2023/ESACCI-SEASURFACESALINITY-L4-SSS-GLOBAL-MERGED_OI_7DAY_RUNNINGMEAN_DAILY_0.25deg-20230101-fv5.5.nc.das](https://data.cci.ceda.ac.uk/thredds/dodsC/esacci/sea_surface_salinity/data/v05.5/GLOBALv5.5/7days/2023/ESACCI-SEASURFACESALINITY-L4-SSS-GLOBAL-MERGED_OI_7DAY_RUNNINGMEAN_DAILY_0.25deg-20230101-fv5.5.nc.das)
+- ESA发布说明：[https://climate.esa.int/en/news-events/Sea-Surface-Salinity-Record-Extended/](https://climate.esa.int/en/news-events/Sea-Surface-Salinity-Record-Extended/)
