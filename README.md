@@ -12,6 +12,20 @@
 | [download_glorys.py](download_glorys.py)   | GLORYS12V1 再分析（默认南海） | 1993–2025                                     | 日均       | ~12.7 GB（南海全深度单年） | [docs/glorys.md](docs/glorys.md)   |
 | [download_duacs.py](download_duacs.py) | DUACS L4 海平面与地转流（默认南海） | 默认 2001 至最新完整年（本次为 2025） | 逐日 | ~93 MiB（南海七变量单年，样本值） | [docs/duacs.md](docs/duacs.md) |
 
+## 新增海表输入与热通量
+
+新增下载器共用 `--bbox W E S N`（西、东、南、北），默认 `105 125 0 25`；支持 `-n/--dry-run`、`-o/--output-dir`、年份选择或 `--start-date` / `--end-date`。默认起点为 2001 年与产品实际起点的较晚者，截止时间按运行时官方目录核查的完整年选择，不补造缺年。
+
+| 脚本 | 用途 | 产品与时间语义 | 文档 |
+| --- | --- | --- | --- |
+| [download_cci_sss.py](download_cci_sss.py) | 海表盐度输入 | ESA CCI SSS v5.5，7 日平均、逐日采样，0.25°网格；有效空间分辨率约 50 km | [docs/cci_sss.md](docs/cci_sss.md) |
+| [download_ccmp.py](download_ccmp.py) | 海表风矢量输入 | RSS CCMP v3.1，0.25°，UTC 00/06/12/18 四个分析时次；可另存本地日均 | [docs/ccmp.md](docs/ccmp.md) |
+| [download_era5_flux.py](download_era5_flux.py) | 热收支约束辅助变量 | ERA5 单层逐小时四项热通量累计量；可另存按 UTC 日积分转换的 W/m² 日均 | [docs/era5_flux.md](docs/era5_flux.md) |
+
+CCI 的逐日输出不是每日独立观测。CCMP 使用卫星观测与 ERA5 背景场融合，不能因平台不同就认为独立。ERA5 原始累计量与本地日均通量分开保存。SSS 是海表盐度；DUACS 的 SLA 是海平面异常，不包含 SSS。海陆缺测与质量标识按上游语义保留。
+
+本次仅开发和小样本验证，**正式下载尚未启动**。测试数据、测试脚本和汇总验证报告已按要求删除。三个下载器的命令、认证前置条件及空间估算见上表各产品文档。既有脚本不代表对应全时段数据已经下载完成；上表 Argo 截至 2022 年的历史表述仅来自一次区域索引筛选，不能推广为整个南海此后没有观测。新增下载器默认区域与 GLORYS、DUACS 一致；CCI/CCMP与ERA5格点中心不同，建模前需显式对齐。MUR的bbox为逗号分隔的西、南、东、北；Argo为逗号分隔的西、东、南、北，且默认区域仍是105–121E、2–25N，请查看各自帮助。
+
 ## 用法
 
 ```powershell

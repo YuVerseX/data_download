@@ -57,6 +57,7 @@ outputs/
 _netrc
 *.netrc
 .edl_token
+.cdsapirc
 *.edl_token
 credentials.json
 secrets.json

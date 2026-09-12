@@ -5,8 +5,10 @@ tqdm>=4.66               # 所有脚本：进度条
 h5py>=3.10               # download_mur_sst.py：校验下载的文件是否被截断，必需
 
 copernicusmarine>=2.4.1  # download_glorys.py / download_duacs.py: CMEMS toolbox
-netCDF4>=1.6            # download_duacs.py: NetCDF validation and provenance
-numpy>=1.26            # download_duacs.py: coordinate validation
-xarray>=2024.10          # download_glorys.py / download_duacs.py: NetCDF validation
+netCDF4>=1.6            # DUACS / CCI SSS / CCMP / ERA5: NetCDF validation and provenance
+numpy>=1.26            # DUACS / CCI SSS / CCMP / ERA5: coordinate/time validation
+xarray>=2024.10          # GLORYS / DUACS / CCI SSS / CCMP / ERA5: NetCDF processing
 
-# cdsapi>=0.7            # download_era5.py
+requests>=2.31          # CCI SSS / CCMP / ERA5: HTTP catalogues and downloads
+pydap>=3.5             # download_cci_sss.py: CEDA server-side regional DAP requests
+cdsapi>=0.7.7           # download_era5_flux.py: CDS retrieval (requires CDS credentials)
