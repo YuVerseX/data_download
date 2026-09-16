@@ -4,12 +4,12 @@
 
 从 CDS `reanalysis-era5-single-levels` 下载最终 ERA5 的四个逐小时累计能量变量，服务端裁剪至指定区域。默认区域为 105–125°E、0–25°N，输出 0.25° 网格。
 
-| NetCDF 变量 | CDS 请求名 | 小时文件单位 |
-|---|---|---|
-| sshf | surface_sensible_heat_flux | J m-2 |
-| slhf | surface_latent_heat_flux | J m-2 |
-| ssr | surface_net_solar_radiation | J m-2 |
-| str | surface_net_thermal_radiation | J m-2 |
+| NetCDF 变量 | CDS 请求名                    | 小时文件单位 |
+| ----------- | ----------------------------- | ------------ |
+| sshf        | surface_sensible_heat_flux    | J m-2        |
+| slhf        | surface_latent_heat_flux      | J m-2        |
+| ssr         | surface_net_solar_radiation   | J m-2        |
+| str         | surface_net_thermal_radiation | J m-2        |
 
 四变量均向下为正，海洋向大气散失热量为负。此 CDS 小时产品的累计窗口为时间戳之前一小时；小时累计能量不是瞬时通量。
 
