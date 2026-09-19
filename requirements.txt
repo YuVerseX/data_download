@@ -12,4 +12,4 @@ dask[array]>=2024.10     # GLORYS：月分片惰性合并，避免把年度数�
 
 requests>=2.31          # CCI SSS / CCMP / ERA5: HTTP catalogues and downloads
 pydap>=3.5             # download_cci_sss.py: CEDA server-side regional DAP requests
-cdsapi>=0.7.7           # download_era5_flux.py: CDS retrieval (requires CDS credentials)
+cdsapi>=0.7.7           # download_era5_flux.py / download_era5_forcing.py: CDS retrieval (requires CDS credentials)

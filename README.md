@@ -15,7 +15,8 @@
 | [OSTIA REP](docs/ostia_rep.md) · `download_ostia_rep.py` | 必填起止日期；逐日数据 | 西北太平洋 100–180°E、0–60°N，默认按月保存 |
 | [CCI SSS](docs/cci_sss.md) · `download_cci_sss.py` | 年份或起止日期；默认选至最新完整年 | 南海 105–125°E、0–25°N，七天滑动平均、逐日采样 |
 | [CCMP](docs/ccmp.md) · `download_ccmp.py` | 年份或起止日期；默认 `2001-latest` | 南海 105–125°E、0–25°N，每天四时次，可另存日均 |
-| [ERA5](docs/era5_flux.md) · `download_era5_flux.py` | 年份或起止日期；默认 2001 起完整最终 ERA5 年 | 南海 105–125°E、0–25°N，小时累计能量，可另存日均通量 |
+| [ERA5 日平均强迫](docs/era5_forcing.md) · `download_era5_forcing.py` | 必填年份或起止日期；示例 1993–2024 | 西北太平洋 100–180°E、0–60°N，12 个日平均变量，按月保存 |
+| [ERA5 小时通量](docs/era5_flux.md) · `download_era5_flux.py` | 年份或起止日期；默认 2001 起完整最终 ERA5 年 | 南海 105–125°E、0–25°N，小时累计能量，可另存日均通量 |
 
 时间参数能被接受，不代表源站已发布全部请求日期。各产品的时间定义、网格和质量标识不同，联合使用前需对齐。
 
