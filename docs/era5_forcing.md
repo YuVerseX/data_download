@@ -1,7 +1,6 @@
 # ERA5 逐日大气强迫下载
 
-`download_era5_forcing.py` 从 CDS 的官方
-`derived-era5-single-levels-daily-statistics` 数据集下载逐日平均 ERA5 单层变量。
+`download_era5_forcing.py` 是兼容入口，等价于 `python download_era5.py cds-daily`。两者都从 CDS 的 `derived-era5-single-levels-daily-statistics` 下载逐日平均 ERA5 单层变量。小时数据用法见 [ERA5](era5.md)。
 默认范围为西北太平洋 `100–180°E, 0–60°N`，空间分辨率为 ERA5 原生 `0.25°`。
 
 ## 默认变量
@@ -75,11 +74,7 @@ ERA5_daily_forcing_1993-01-01_1993-01-31.zip
 ERA5_daily_forcing_1993-01-01_1993-01-31.zip.json
 ```
 
-只选择一个变量时 CDS 返回裸 NetCDF，脚本相应保存为 `.nc` 和 `.nc.json`，而不是给
-NetCDF 文件使用错误的 `.zip` 扩展名。
-
-CDS 的该数据集会把多变量请求的 NetCDF 打包为 ZIP，但不承诺每个变量各占一个文件。脚本保留官方
-原始结构，并在完成后检查：
+只选择一个变量时保存为 `.nc` 和 `.nc.json`。多变量请求保存为 ZIP，其中一个 NetCDF 可以包含多个变量。脚本兼容 CDS 返回的裸 NetCDF 和 ZIP，并在发布前检查下列内容。
 
 - ZIP 是否完整且至少包含一个 NetCDF；
 - 所有 NetCDF 是否包含请求变量对应的预期短名；
