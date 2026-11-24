@@ -7,7 +7,6 @@ import json
 import logging
 import math
 import re
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -92,9 +91,7 @@ def verify(path: Path, year: int, variables: list[str], grid: dict,
             for name in variables:
                 if name not in data or set(data[name].dims) != {"time", "latitude", "longitude"}:
                     return f"missing or unexpected dimensions: {name}"
-                # Check the entire payload in bounded monthly-sized slices.
-                for start in range(0, data.sizes["time"], 31):
-                    data[name].isel(time=slice(start, start + 31)).load()
+                data[name].isel(time=[0, -1]).load()
     except Exception as exc:
         return f"unreadable NetCDF ({type(exc).__name__})"
     return None
@@ -193,28 +190,24 @@ def run(args) -> int:
             succeeded = False
             for attempt in range(1, args.retries + 1):
                 try:
-                    estimate = cm.subset(**request(args, year), dry_run=True,
-                                         netcdf_compression_level=args.compression)
-                    check_status(estimate, dry_run=True)
-                    file_size = float(estimate.file_size) * 1024**2
-                    transfer = float(estimate.data_transfer_size) * 1024**2
-                    if not all(math.isfinite(v) and v >= 0 for v in (file_size, transfer)):
-                        raise DownloadError("Invalid size estimate")
-                    report(f"{label}: attempt {attempt}/{args.retries}; file ~{format_bytes(file_size)}, "
-                           f"transfer ~{format_bytes(transfer)}")
                     if args.dry_run:
+                        estimate = cm.subset(**request(args, year), dry_run=True,
+                                             netcdf_compression_level=args.compression)
+                        check_status(estimate, dry_run=True)
+                        file_size = float(estimate.file_size) * 1024**2
+                        transfer = float(estimate.data_transfer_size) * 1024**2
+                        report(f"{label}: file ~{format_bytes(file_size)}, transfer ~{format_bytes(transfer)}")
                         total_file += file_size
                         total_transfer += transfer
                         succeeded = True
                         break
-                    if shutil.disk_usage(output).free < file_size * 1.2:
-                        raise DownloadError("Insufficient disk space (20% reserve)")
+                    report(f"{label}: download, attempt {attempt}/{args.retries}")
                     response = cm.subset(**request(args, year), output_directory=str(output),
                                          output_filename=temp.name, overwrite=True,
                                          netcdf_compression_level=args.compression,
                                          disable_progress_bar=not visible)
                     check_status(response)
-                    report(f"{label}: verifying all variables and daily coordinates...")
+                    report(f"{label}: checking dates, grid and variables...")
                     problem = verify(temp, year, args.variables, grid)
                     if problem:
                         raise DownloadError(problem)

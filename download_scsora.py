@@ -136,13 +136,10 @@ def head(url: str) -> RemoteFile:
 
 
 def validate_range(response, offset: int, total: int) -> None:
-    if offset == 0:
-        if response.status not in (200, 206):
-            raise RuntimeError(f"意外的 HTTP 状态码 {response.status}")
-        return
     if response.status == 200:
-        # 请求带了 If-Range，返回 200 说明远端文件在下载期间被换掉了
-        raise RuntimeError("远端文件已变更，.part 不能再续写，请删除后重下")
+        if offset == 0:
+            return
+        raise RuntimeError("服务器未接受续传，可能不支持 Range 或远端已更新；.part 已保留")
     if response.status != 206:
         raise RuntimeError(f"服务器不支持续传（HTTP {response.status}），.part 已保留")
 
@@ -150,8 +147,8 @@ def validate_range(response, offset: int, total: int) -> None:
     match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", content_range.strip())
     if not match:
         raise RuntimeError(f"无法解析 Content-Range：{content_range!r}")
-    start, _, remote_total = (int(g) for g in match.groups())
-    if start != offset or remote_total != total:
+    start, end, remote_total = (int(g) for g in match.groups())
+    if start != offset or remote_total != total or not start <= end < total:
         raise RuntimeError(
             f"续传响应不匹配：期望 offset={offset} size={total}，实际 {content_range!r}")
 
@@ -231,7 +228,7 @@ def fetch(partial: Path, url: str, remote: RemoteFile, progress) -> None:
 
             # 只要这轮写进了新字节就不算失败，否则长下载会被正常的连接中断耗光额度
             consecutive = 0 if current > offset else consecutive + 1
-            if consecutive > RETRIES:
+            if consecutive >= RETRIES:
                 raise RuntimeError(
                     f"连续 {RETRIES} 次没有进展（{error or '连接提前结束'}）；"
                     f"已保留 {format_bytes(current)}，重跑同样的命令可继续")
@@ -274,8 +271,7 @@ def download_one(year: int, output_dir: Path, overwrite: bool, label: str) -> Ou
             return Outcome(year, "failed",
                            f"{filename} 已存在但大小不符（本地 {size} / 远端 "
                            f"{remote.size} 字节），未覆盖；确认无用后加 --overwrite")
-        target.unlink()
-        print(f"{label} 已删除大小不符的旧文件 {filename}")
+        print(f"{label} 保留大小不符的旧文件，待新文件完整后替换 {filename}")
 
     offset = partial.stat().st_size if partial.exists() else 0
     resume = f"，续传自 {format_bytes(offset)}" if offset else ""
@@ -303,6 +299,7 @@ def show_plan(years: list[int], output_dir: Path) -> int:
     print(f"{'年份':<4}{'远端大小':>10}  本地状态")
 
     pending = 0
+    failures = 0
     for year in years:
         filename = FILENAME.format(year=year)
         target = output_dir / filename
@@ -311,6 +308,7 @@ def show_plan(years: list[int], output_dir: Path) -> int:
             remote = head(f"{BASE_URL}/{filename}")
         except RuntimeError as exc:
             print(f"{year:<6}{'-':>14}  查询失败：{exc}")
+            failures += 1
             continue
 
         if target.exists():
@@ -330,7 +328,7 @@ def show_plan(years: list[int], output_dir: Path) -> int:
     print(f"\n合计待下载 {format_bytes(pending)}，目标盘可用 {format_bytes(free)}")
     if pending > free:
         log("注意：可用空间不足以一次下完，需分批或先腾空间")
-    return 0
+    return 1 if failures else 0
 
 
 def main() -> int:
@@ -344,7 +342,7 @@ def main() -> int:
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="只列出下载计划和本地状态，不实际下载")
     parser.add_argument("--overwrite", action="store_true",
-                        help="正式文件已存在但大小不符时删除重下")
+                        help="正式文件大小不符时重下，完整后替换旧文件")
     parser.add_argument("--stop-on-error", action="store_true",
                         help="某个年份失败就停止，默认继续下一个")
     args = parser.parse_args()

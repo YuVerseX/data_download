@@ -25,6 +25,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tqdm import tqdm
+
 
 COLLECTION = "C1996881146-POCLOUD"
 GRANULE = "{:%Y%m%d}090000-JPL-L4_GHRSST-SSTfnd-MUR-GLOB-v02.0-fv04.1"
@@ -48,7 +50,6 @@ CHUNK_SIZE = 256 * 1024
 RETRIES = 5
 MAX_BACKOFF = 30
 TIMEOUT = 30                        # 正常 6～7 秒就回来，卡住没必要等太久
-LOG_INTERVAL = 60
 MAX_JOBS = 8
 FATAL_HTTP = frozenset({400, 401, 403, 405, 410, 416, 451})
 
@@ -71,14 +72,6 @@ def format_bytes(value: float) -> str:
             return f"{value:.2f} {unit}"
         value /= 1024
     return f"{value:.2f} TiB"
-
-
-def cell(text: str, width: int, align: str = ">") -> str:
-    """按终端显示宽度补空格。中文占两列，直接用 f-string 的 :<n 会错位。"""
-    import unicodedata
-    shown = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
-    pad = " " * max(0, width - shown)
-    return pad + text if align == ">" else text + pad
 
 
 # --------------------------------------------------------------------------
@@ -300,7 +293,8 @@ def read_url(url: str, token: str) -> bytes:
 # 完整性校验
 # --------------------------------------------------------------------------
 
-def verify_nc4(path: Path, variables: tuple[str, ...]) -> str | None:
+def verify_nc4(path: Path, variables: tuple[str, ...],
+               window: Window | None = None) -> str | None:
     """校验 nc4 是否完整可读。返回 None 表示通过，否则返回原因。
 
     只看文件头魔数是挡不住截断的（实测截断到 99% 仍能通过魔数检查），
@@ -312,71 +306,17 @@ def verify_nc4(path: Path, variables: tuple[str, ...]) -> str | None:
             for name in (*variables, "lat", "lon", "time"):
                 if name not in handle:
                     return f"缺少变量 {name}"
+            if window is not None:
+                for name, first, last, origin in (("lat", window.i0, window.i1, LAT0),
+                                                   ("lon", window.j0, window.j1, LON0)):
+                    axis = handle[name]
+                    if (axis.shape != (last - first + 1,)
+                            or abs(float(axis[0]) - (origin + first * STEP)) > STEP / 2
+                            or abs(float(axis[-1]) - (origin + last * STEP)) > STEP / 2):
+                        return f"{name} 范围与请求区域不一致"
     except OSError as exc:
         return str(exc).split("\n")[0][:120]
     return None
-
-
-# --------------------------------------------------------------------------
-# 进度显示
-# --------------------------------------------------------------------------
-
-class LogProgress:
-    """stderr 不是终端时用：定时打一行，避免日志被 \\r 压成一整行。"""
-
-    def __init__(self, total: int, label: str) -> None:
-        self.total, self.label = total, label
-        self.n = 0
-        self.postfix = ""
-        self.started = self.last = time.monotonic()
-
-    def update(self, delta: int = 1) -> None:
-        self.n += delta
-        now = time.monotonic()
-        if now - self.last < LOG_INTERVAL and self.n < self.total:
-            return
-        self.last = now
-        elapsed = now - self.started
-        rate = self.n / elapsed if elapsed else 0
-        eta = (self.total - self.n) / rate / 60 if rate else 0
-        log(f"{self.label} {self.n}/{self.total} ({self.n * 100 / self.total:5.1f}%)  "
-            f"{rate * 60:.1f} 天/分  ETA {eta:.0f} 分  {self.postfix}")
-
-    def set_postfix_str(self, text: str) -> None:
-        self.postfix = text
-
-    def close(self) -> None:
-        pass
-
-
-class YearProgress:
-    """一年一条进度条，单位是天；累计体积挂在 postfix 上。"""
-
-    def __init__(self, total: int, label: str) -> None:
-        self.lock = threading.Lock()
-        self.done = self.failed = self.missing = 0
-        self.nbytes = 0
-        if sys.stderr.isatty():
-            from tqdm import tqdm
-            self.bar = tqdm(total=total, unit="天", desc=label,
-                            dynamic_ncols=True, smoothing=0.1)
-        else:
-            self.bar = LogProgress(total, label)
-
-    def tick(self, status: str, nbytes: int = 0) -> None:
-        with self.lock:
-            setattr(self, status, getattr(self, status) + 1)
-            self.nbytes += nbytes
-            bits = [format_bytes(self.nbytes)]
-            if self.missing:
-                bits.append(f"未发布{self.missing}")
-            if self.failed:
-                bits.append(f"失败{self.failed}")
-            self.bar.set_postfix_str(" ".join(bits))
-            self.bar.update(1)
-
-    def close(self) -> None:
-        self.bar.close()
 
 
 # --------------------------------------------------------------------------
@@ -418,7 +358,7 @@ def verify_window(window: Window, token: str) -> None:
 
 
 def download_day(day: dt.date, target: Path, ce: str, token: str,
-                 variables: tuple[str, ...]) -> int:
+                 variables: tuple[str, ...], window: Window) -> int:
     """OPeNDAP 响应是 chunked、无 Content-Length 也不支持 Range，失败只能整个重下。"""
     query = urllib.parse.urlencode({"dap4.ce": ce})
     url = f"{OPENDAP}/{GRANULE.format(day)}.dap.nc4?{query}"
@@ -433,7 +373,7 @@ def download_day(day: dt.date, target: Path, ce: str, token: str,
                         handle.write(block)
                     handle.flush()
                     os.fsync(handle.fileno())
-            if (reason := verify_nc4(partial, variables)) is not None:
+            if (reason := verify_nc4(partial, variables, window)) is not None:
                 last = f"文件校验未通过：{reason}"
             else:
                 size = partial.stat().st_size
@@ -471,13 +411,14 @@ def run_year(year: int, days: list[dt.date], args, token: str, ce: str,
              summary: Summary, label: str) -> None:
     (args.output_dir / str(year)).mkdir(parents=True, exist_ok=True)
     variables = tuple(args.vars)
+    window = bbox_to_window(args.bbox)
 
     pending: list[tuple[dt.date, Path]] = []
     for day in days:
         target = target_for(day, args.output_dir)
         # 重下的旧文件不在这里删：download_day 校验通过后才 replace，
         # 提前删只会在中途失败时把旧文件也搭进去
-        if target.exists() and not args.overwrite and verify_nc4(target, variables) is None:
+        if target.exists() and not args.overwrite and verify_nc4(target, variables, window) is None:
             summary.skipped += 1
             continue
         pending.append((day, target))
@@ -487,11 +428,11 @@ def run_year(year: int, days: list[dt.date], args, token: str, ce: str,
         return
 
     out(f"{label} {year}  待下 {len(pending)}/{len(days)} 天")
-    progress = YearProgress(len(pending), str(year))
+    progress = tqdm(total=len(pending), desc=str(year), unit="天", disable=not sys.stderr.isatty())
 
     def work(day: dt.date, target: Path):
         try:
-            return day, "done", download_day(day, target, ce, token, variables), ""
+            return day, "done", download_day(day, target, ce, token, variables, window), ""
         except Missing as exc:
             return day, "missing", 0, str(exc)
         except Fatal:
@@ -505,7 +446,8 @@ def run_year(year: int, days: list[dt.date], args, token: str, ce: str,
             try:
                 for future in futures.as_completed(submitted):
                     day, status, size, detail = future.result()
-                    progress.tick(status, size)
+                    progress.update()
+                    summary.nbytes += size
                     if status == "done":
                         summary.done += 1
                     elif status == "missing":
@@ -516,7 +458,6 @@ def run_year(year: int, days: list[dt.date], args, token: str, ce: str,
                 pool.shutdown(wait=False, cancel_futures=True)
                 raise
     finally:
-        summary.nbytes += progress.nbytes
         progress.close()
 
 
@@ -528,8 +469,7 @@ def show_plan(days: list[dt.date], args) -> int:
         f"lon[{window.j0}:{window.j1}]  {rows} x {cols} 格点")
     out(f"变量：{', '.join(args.vars)}")
     out("")
-    out(cell("年份", 6, "<") + cell("总天数", 8) + cell("已完成", 8)
-        + cell("待下载", 8) + cell("预估体积", 14))
+    out("年份    总天数  已完成  待下载  预估体积")
 
     by_year: dict[int, list[dt.date]] = {}
     for day in days:
@@ -539,13 +479,12 @@ def show_plan(days: list[dt.date], args) -> int:
     total_pending = 0
     for year, group in sorted(by_year.items()):
         have = sum(1 for day in group
-                   if (target := target_for(day, args.output_dir)).exists()
-                   and verify_nc4(target, variables) is None)
+                   if not args.overwrite and (target := target_for(day, args.output_dir)).exists()
+                   and verify_nc4(target, variables, window) is None)
         need = len(group) - have
         size = need * EST_PER_DAY
         total_pending += size
-        out(cell(str(year), 6, "<") + cell(str(len(group)), 8) + cell(str(have), 8)
-            + cell(str(need), 8) + cell(format_bytes(size), 14))
+        out(f"{year}  {len(group):>6}  {have:>6}  {need:>6}  {format_bytes(size)}")
 
     free = shutil.disk_usage(args.output_dir).free
     out(f"\n合计 {len(days)} 天，待下载约 {format_bytes(total_pending)}（估算），"
@@ -587,7 +526,7 @@ def main() -> int:
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="只列出计划和本地状态，不下载")
     parser.add_argument("--overwrite", action="store_true",
-                        help="已存在的文件也重新下载")
+                        help="已存在的文件也重新下载，预检查计入待下载量")
     args = parser.parse_args()
 
     try:

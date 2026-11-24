@@ -7,9 +7,9 @@ h5py>=3.10               # download_mur_sst.py：校验下载的文件是否被�
 copernicusmarine>=2.4.1  # GLORYS / DUACS / CMEMS SSS / OSTIA REP: CMEMS toolbox
 netCDF4>=1.6            # DUACS / CMEMS SSS / OSTIA REP / CCI SSS / CCMP / ERA5: validation/provenance
 numpy>=1.26            # DUACS / CMEMS SSS / OSTIA REP / CCI SSS / CCMP / ERA5: coordinate/time validation
-xarray>=2024.10          # GLORYS / DUACS / CMEMS SSS / OSTIA REP / CCI SSS / CCMP / ERA5: NetCDF processing
-dask[array]>=2024.10     # GLORYS：月分片惰性合并，避免把年度数据全部载入内存
+xarray>=2024.10          # Argo 可读性检查；GLORYS / DUACS / SSS / OSTIA / CCMP / ERA5 NetCDF 处理
+dask[array]>=2024.10     # ERA5：分块处理 NetCDF；也用于 Toolbox 和 GLORYS 月文件读取示例
 
 requests>=2.31          # CCI SSS / CCMP / ERA5: HTTP catalogues and downloads
 pydap>=3.5             # download_cci_sss.py: CEDA server-side regional DAP requests
-cdsapi>=0.7.7           # download_era5_flux.py / download_era5_forcing.py: CDS retrieval (requires CDS credentials)
+cdsapi>=0.7.7           # download_era5.py：CDS 下载，需要 CDS 凭据

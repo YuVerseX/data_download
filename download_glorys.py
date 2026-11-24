@@ -14,6 +14,7 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import re
 import shutil
 import sys
@@ -171,29 +172,6 @@ def verify_period(path: Path, start: date, end: date,
 def verify(path: Path, year: int, variables: list[str]) -> str | None:
     start, end = year_bounds(year)
     return verify_period(path, start, end, variables)
-
-
-def verify_data_readable(path: Path, variables: list[str]) -> str | None:
-    """逐时间片读取数据，仅在合并读取失败后用于定位损坏分片。"""
-    import netCDF4
-
-    try:
-        with netCDF4.Dataset(path) as dataset:
-            names = list(dict.fromkeys([*variables, *dataset.variables]))
-            for name in names:
-                variable = dataset.variables[name]
-                variable.set_auto_maskandscale(False)
-                if "time" not in variable.dimensions:
-                    variable[...]
-                    continue
-                time_axis = variable.dimensions.index("time")
-                for index in range(dataset.dimensions["time"].size):
-                    selection = [slice(None)] * variable.ndim
-                    selection[time_axis] = index
-                    variable[tuple(selection)]
-    except Exception as exc:
-        return exception_chain(exc)
-    return None
 
 
 @dataclass
@@ -491,7 +469,12 @@ def merge_months(year: int, parts: list[Path], target: Path, tmp_dir: Path,
                     if depth_axis is not None:
                         source_slice[depth_axis] = slice(depth_start, depth_end)
                         block_slice[depth_axis] = slice(0, depth_end - depth_start)
-                    block[tuple(block_slice)] = source[tuple(source_slice)]
+                    try:
+                        block[tuple(block_slice)] = source[tuple(source_slice)]
+                    except (OSError, RuntimeError) as exc:
+                        raise RuntimeError(
+                            f"无法读取 {source.group().filepath()} 的 {source.name}；"
+                            "请移开该月文件后重跑") from exc
                 destination[tuple(target_slice)] = block
 
     merging = tmp_dir / f"{target.name}.merging"
@@ -502,6 +485,29 @@ def merge_months(year: int, parts: list[Path], target: Path, tmp_dir: Path,
             sources = [stack.enter_context(netCDF4.Dataset(part))
                        for part in parts]
             template = sources[0]
+            for source, part in zip(sources, parts):
+                if set(source.variables) != set(template.variables):
+                    raise ValueError(f"{part.name} 的变量列表与首月不一致")
+                for name, variable in source.variables.items():
+                    reference = template.variables[name]
+                    if (variable.dimensions != reference.dimensions or variable.dtype != reference.dtype
+                            or any(variable.shape[i] != reference.shape[i]
+                                   for i, dim in enumerate(variable.dimensions) if dim != "time")):
+                        raise ValueError(f"{part.name} 的变量 {name} 结构与首月不一致")
+                    for attribute in ("units", "calendar", "scale_factor", "add_offset",
+                                      "_FillValue", "missing_value", "_Unsigned"):
+                        left, right = variable.__dict__.get(attribute), reference.__dict__.get(attribute)
+                        numeric = (left is not None and right is not None
+                                   and np.asarray(left).dtype.kind in "fciub"
+                                   and np.asarray(right).dtype.kind in "fciub")
+                        if not np.array_equal(left, right, equal_nan=numeric):
+                            raise ValueError(f"{part.name} 的 {name}.{attribute} 与首月不一致，请保留月文件或统一编码")
+                    variable.set_auto_maskandscale(False)
+                    if "time" not in variable.dimensions:
+                        reference.set_auto_maskandscale(False)
+                        if not np.array_equal(variable[...], reference[...],
+                                              equal_nan=variable.dtype.kind in "fc"):
+                            raise ValueError(f"{part.name} 的静态变量 {name} 与首月不一致")
             total_time = sum(len(source.dimensions["time"])
                              for source in sources)
             output = stack.enter_context(
@@ -540,22 +546,6 @@ def merge_months(year: int, parts: list[Path], target: Path, tmp_dir: Path,
                 })
                 destination.set_auto_maskandscale(False)
 
-            for source, part in zip(sources, parts):
-                if set(source.variables) != set(template.variables):
-                    raise RuntimeError(f"{part.name} 的变量列表与首月不一致")
-                for name, source_variable in source.variables.items():
-                    reference = template.variables[name]
-                    if (source_variable.dimensions != reference.dimensions
-                            or source_variable.dtype != reference.dtype):
-                        raise RuntimeError(
-                            f"{part.name} 的变量 {name} 结构与首月不一致")
-                    source_variable.set_auto_maskandscale(False)
-                    if "time" not in source_variable.dimensions:
-                        reference.set_auto_maskandscale(False)
-                        if not np.array_equal(source_variable[...], reference[...]):
-                            raise RuntimeError(
-                                f"{part.name} 的非时间变量 {name} 与首月不一致")
-
             for name, reference in template.variables.items():
                 destination = output.variables[name]
                 if "time" not in reference.dimensions:
@@ -571,25 +561,7 @@ def merge_months(year: int, parts: list[Path], target: Path, tmp_dir: Path,
         merging.replace(target)
         return None
     except Exception as exc:
-        detail = exception_chain(exc)
-        if (isinstance(exc, (OSError, RuntimeError))
-                and getattr(exc, "errno", None) != errno.ENOSPC):
-            damaged: list[str] = []
-            undeleted: list[str] = []
-            for part in parts:
-                problem = verify_data_readable(part, options.variables)
-                if problem is None:
-                    continue
-                try:
-                    part.unlink()
-                    damaged.append(part.name)
-                except OSError as unlink_error:
-                    undeleted.append(f"{part.name}（{unlink_error}）")
-            if damaged:
-                detail += f"；已删除损坏分片：{', '.join(damaged)}"
-            if undeleted:
-                detail += f"；损坏分片删除失败：{', '.join(undeleted)}"
-        return detail
+        return exception_chain(exc)
 
 
 def run_month_downloads(year: int, parts_dir: Path, options: Options,
@@ -649,122 +621,43 @@ def run_month_downloads(year: int, parts_dir: Path, options: Options,
     return results
 
 
-def failed_month_outcome(year: int,
-                         results: list[tuple[int, str, str]]) -> Outcome | None:
-    failed = sorted(result for result in results if result[1] == "failed")
-    if not failed:
-        return None
-    months = ", ".join(f"{month:02d}" for month, _, _ in failed)
-    return Outcome(year, "failed", f"月份 {months} 下载失败；已完成分片保留")
-
-
 def download_monthly_year(year: int, output_dir: Path, tmp_dir: Path,
                           options: Options, workers: int, retries: int,
-                          keep_monthly: bool, label: str) -> Outcome:
+                          keep_monthly: bool, label: str,
+                          monthly_files: bool = False, overwrite: bool = False) -> Outcome:
+    """共用月度下载流程，按需保留月文件或合并年度文件。"""
     target = output_dir / FILENAME.format(year=year)
     cache_dir = tmp_dir / PARTS_DIRNAME / request_cache_key(options)
     parts_dir = cache_dir / str(year)
     parts_dir.mkdir(parents=True, exist_ok=True)
-    print(f"{label} 按月下载 {year}（并发 {workers}，每月最多 {retries} 次），"
-          f"磁盘可用 {format_bytes(shutil.disk_usage(tmp_dir).free)}", flush=True)
+    final_dir = output_dir / str(year) if monthly_files else None
+    if final_dir is not None:
+        final_dir.mkdir(parents=True, exist_ok=True)
+    print(f"{label} {year} 按月下载（并发 {workers}，每月最多 {retries} 次）", flush=True)
+    results = run_month_downloads(
+        year, parts_dir, options, workers, retries, label,
+        final_dir=final_dir, force=monthly_files and overwrite)
+    failed = sorted(month for month, status, _ in results if status == "failed")
+    if failed:
+        return Outcome(year, "failed", f"月份 {failed} 失败；已完成分片保留")
 
-    results = run_month_downloads(year, parts_dir, options, workers, retries, label)
-    failed = failed_month_outcome(year, results)
-    if failed is not None:
-        return failed
-
-    parts = [parts_dir / PART_FILENAME.format(year=year, month=month)
-             for month in range(1, 13)]
-    print(f"{label} 合并 {year} 年 12 个月分片", flush=True)
-    problem = merge_months(year, parts, target, tmp_dir, options)
-    if problem is not None:
-        return Outcome(year, "failed", f"合并失败：{problem}；月分片保留")
-
-    if not keep_monthly:
-        cleanup_failed: list[str] = []
-        for part in parts:
-            try:
-                part.unlink()
-            except OSError as exc:
-                cleanup_failed.append(f"{part.name}（{exc}）")
-        try:
-            parts_dir.rmdir()
-            cache_dir.rmdir()
-            cache_dir.parent.rmdir()
-        except OSError:
-            pass
-        if cleanup_failed:
-            log(f"{label} 年度文件已完成，但部分月分片清理失败："
-                f"{', '.join(cleanup_failed)}")
-    print(f"{label} 完成 {target.name}（{format_bytes(target.stat().st_size)}）", flush=True)
-    return Outcome(year, "done")
-
-
-def cleanup_empty_cache_dirs(parts_dir: Path, cache_dir: Path) -> None:
-    """月分片迁走后，按从内到外的顺序清理空缓存目录。"""
+    if not monthly_files:
+        parts = [parts_dir / PART_FILENAME.format(year=year, month=month)
+                 for month in range(1, 13)]
+        print(f"{label} 合并 {year} 年 12 个月分片", flush=True)
+        problem = merge_months(year, parts, target, tmp_dir, options)
+        if problem is not None:
+            return Outcome(year, "failed", f"合并失败：{problem}；月分片保留")
+        if not keep_monthly:
+            for part in parts:
+                try:
+                    part.unlink()
+                except OSError as exc:
+                    log(f"年度文件已完成，月分片清理失败：{part.name}（{exc}）")
     for directory in (parts_dir, cache_dir, cache_dir.parent):
         with contextlib.suppress(OSError):
             directory.rmdir()
-
-
-def promote_cached_months(year: int, cache_parts_dir: Path, final_parts_dir: Path,
-                          options: Options) -> int:
-    """把旧 monthly 合并模式留下的有效分片原子迁移到可见目录。"""
-    promoted = 0
-    for month in range(1, 13):
-        cached = cache_parts_dir / PART_FILENAME.format(year=year, month=month)
-        if not cached.exists():
-            continue
-        final = final_parts_dir / cached.name
-        start, end = month_bounds(year, month)
-        if final.exists() and verify_period(final, start, end, options.variables) is None:
-            with contextlib.suppress(OSError):
-                cached.unlink()
-            continue
-        problem = verify_period(cached, start, end, options.variables)
-        if problem is not None:
-            log(f"{cached.name} 旧缓存校验不过（{problem}），不复用")
-            continue
-        try:
-            publish_month(cached, final)
-        except RetryablePublishError as exc:
-            log(f"{cached.name} 旧缓存发布失败（{exc}），稍后重试")
-            continue
-        promoted += 1
-    return promoted
-
-
-def download_month_files_year(year: int, output_dir: Path, tmp_dir: Path,
-                              options: Options, workers: int, retries: int,
-                              overwrite: bool, label: str) -> Outcome:
-    """下载并保留可直接使用的月文件，不生成年度物理合并文件。"""
-    final_parts_dir = output_dir / str(year)
-    final_parts_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir = tmp_dir / PARTS_DIRNAME / request_cache_key(options)
-    cache_parts_dir = cache_dir / str(year)
-    promoted = 0
-    if not overwrite:
-        promoted = promote_cached_months(
-            year, cache_parts_dir, final_parts_dir, options)
-    cache_parts_dir.mkdir(parents=True, exist_ok=True)
-
-    reused = f"，迁移旧缓存 {promoted} 个月" if promoted else ""
-    print(f"{label} 保留月文件 {year}（并发 {workers}，每月最多 {retries} 次{reused}），"
-          f"磁盘可用 {format_bytes(shutil.disk_usage(tmp_dir).free)}", flush=True)
-    results = run_month_downloads(
-        year, cache_parts_dir, options, workers, retries, label,
-        final_dir=final_parts_dir, force=overwrite)
-    cleanup_empty_cache_dirs(cache_parts_dir, cache_dir)
-    failed = failed_month_outcome(year, results)
-    if failed is not None:
-        return failed
-
-    total_size = sum(
-        (final_parts_dir / PART_FILENAME.format(year=year, month=month)).stat().st_size
-        for month in range(1, 13)
-    )
-    print(f"{label} 完成 {year} 年 12 个月文件（{format_bytes(total_size)}），"
-          f"目录：{final_parts_dir}", flush=True)
+    print(f"{label} 完成 {final_dir if monthly_files else target}", flush=True)
     return Outcome(year, "done")
 
 
@@ -854,8 +747,9 @@ def main() -> int:
         parser.error("--keep-monthly 只能与 --strategy monthly 一起使用")
 
     west, east, south, north = args.bbox
-    if west >= east or south >= north:
-        parser.error(f"bbox 反了：{args.bbox}，要求 W<E 且 S<N")
+    if (not all(math.isfinite(value) for value in args.bbox)
+            or not (-180 <= west < east <= 180 and -90 <= south < north <= 90)):
+        parser.error("bbox 要求 -180<=W<E<=180 且 -90<=S<N<=90")
     if (args.min_depth is not None and args.max_depth is not None
             and args.min_depth > args.max_depth):
         parser.error(f"深度范围反了：{args.min_depth} > {args.max_depth}")
@@ -905,14 +799,12 @@ def main() -> int:
                 continue
 
             try:
-                if args.strategy == "monthly":
+                if args.strategy in ("monthly", "monthly-files"):
                     outcome = download_monthly_year(
                         year, output_dir, tmp_dir, options, args.workers, args.retries,
-                        args.keep_monthly, label)
-                elif args.strategy == "monthly-files":
-                    outcome = download_month_files_year(
-                        year, output_dir, tmp_dir, options, args.workers, args.retries,
-                        args.overwrite, label)
+                        args.keep_monthly, label,
+                        monthly_files=args.strategy == "monthly-files",
+                        overwrite=args.overwrite)
                 else:
                     outcome = download_year(year, output_dir, tmp_dir, options, label)
             except Exception as exc:

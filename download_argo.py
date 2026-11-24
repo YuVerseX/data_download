@@ -7,9 +7,11 @@ import argparse
 import concurrent.futures
 import gzip
 import http.client
+from datetime import datetime, timezone
 import random
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +40,7 @@ TIMEOUT = 60
 MAX_BACKOFF = 30
 MAX_WORKERS = 16                   # 对方是公共服务器，别开太猛
 FATAL_HTTP = frozenset({400, 401, 403, 404, 410, 451})
+_PROFILE_LOCK = threading.Lock()  # netCDF 库读取串行，网络下载仍并发。
 
 
 def log(message: str) -> None:
@@ -100,8 +103,33 @@ def backoff(consecutive: int) -> float:
     return min(2 ** consecutive, MAX_BACKOFF) + random.uniform(0, 1)
 
 
+def profile_is_current(path: Path, updated: str = "") -> bool:
+    """检查小型剖面文件可读性，并与索引的更新时间比较。"""
+    import xarray as xr
+
+    try:
+        if not path.is_file():
+            return False
+        with _PROFILE_LOCK, xr.open_dataset(path, decode_times=False) as data:
+            if "PRES" not in data or not ({"TEMP", "PSAL"} & set(data.variables)):
+                return False
+            data.load()
+            if updated.isdigit() and len(updated) == 14:
+                if "DATE_UPDATE" in data:
+                    values = data["DATE_UPDATE"].values.reshape(-1).tolist()
+                    actual = (b"".join(values).decode("ascii") if values and isinstance(values[0], bytes)
+                              else "".join(map(str, values)))
+                    return actual.strip() >= updated
+                downloaded = datetime.fromtimestamp(
+                    path.stat().st_mtime, timezone.utc).strftime("%Y%m%d%H%M%S")
+                return downloaded >= updated
+    except (OSError, ValueError, EOFError, RuntimeError):
+        return False
+    return True
+
+
 def http_get(url: str, target: Path) -> int:
-    """下到 .part 再改名；返回字节数。永久性错误不重试。"""
+    """下到 .part，检查剖面可读性后改名；返回字节数。"""
     partial = target.with_name(target.name + ".part")
     last = "未知错误"
     for attempt in range(1, RETRIES + 1):
@@ -116,6 +144,8 @@ def http_get(url: str, target: Path) -> int:
                         size += len(block)
             if expected is not None and size != int(expected):
                 raise RuntimeError(f"大小不符：期望 {expected}，实际 {size}")
+            if target.suffix == ".nc" and not profile_is_current(partial):
+                raise RuntimeError("剖面 NetCDF 不完整或缺少压力与温盐观测")
             partial.replace(target)
             return size
         except urllib.error.HTTPError as exc:
@@ -138,6 +168,7 @@ class Profile:
     lat: float
     lon: float
     institution: str
+    updated: str = ""
 
     @property
     def float_id(self) -> str:
@@ -150,7 +181,7 @@ class Profile:
 
     @property
     def year(self) -> int | None:
-        return int(self.date[:4]) if len(self.date) >= 4 else None
+        return int(self.date[:4]) if len(self.date) >= 4 and self.date[:4].isdigit() else None
 
 
 def fetch_index(cache: Path, refresh: bool) -> Path:
@@ -191,11 +222,11 @@ def read_index(cache: Path, bbox: tuple[float, float, float, float],
                 continue
             if not (lat0 <= lat <= lat1 and lon0 <= lon <= lon1):
                 continue
-            if years is not None and (len(date) < 4 or int(date[:4]) not in years):
+            if years is not None and (len(date) < 4 or not date[:4].isdigit() or int(date[:4]) not in years):
                 continue
             if mode != "all" and not path.rsplit("/", 1)[-1].startswith(mode):
                 continue
-            selected.append(Profile(path, date, lat, lon, fields[6]))
+            selected.append(Profile(path, date, lat, lon, fields[6], fields[7].strip() if len(fields) > 7 else ""))
     selected.sort(key=lambda p: (p.date, p.path))
     return selected
 
@@ -248,12 +279,12 @@ def download_all(profiles: list[Profile], out_dir: Path,
 
     def worker(profile: Profile) -> tuple[Profile, str, str]:
         target = root / profile.path
-        if target.exists() and target.stat().st_size > 0 and not overwrite:
-            return profile, "exists", ""
-        target.parent.mkdir(parents=True, exist_ok=True)
         try:
+            if not overwrite and profile_is_current(target, profile.updated):
+                return profile, "exists", ""
+            target.parent.mkdir(parents=True, exist_ok=True)
             http_get(f"{BASE_URL}/dac/{profile.path}", target)
-        except RuntimeError as exc:
+        except (RuntimeError, OSError) as exc:
             return profile, "failed", str(exc)
         return profile, "done", ""
 
@@ -269,11 +300,8 @@ def download_all(profiles: list[Profile], out_dir: Path,
                 else:
                     failures.append(f"{profile.path}\t{detail}")
                 progress.update(1)
-        except KeyboardInterrupt:
-            # 不等在途请求，Ctrl-C 要立刻有反应
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise
-        executor.shutdown(wait=True)
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
     return done, skipped, failures
 
 
@@ -328,9 +356,9 @@ def main() -> int:
         return 1
 
     summarize(profiles, args.bbox)
+    write_selection(profiles, out_dir / SELECTED_NAME)
     if not profiles:
         return 0
-    write_selection(profiles, out_dir / SELECTED_NAME)
 
     if args.dry_run:
         print("\n--dry-run，未下载剖面文件")
@@ -350,6 +378,7 @@ def main() -> int:
         report.write_text("\n".join(failures) + "\n", encoding="utf-8")
         log(f"失败清单写入 {report}，重跑同样的命令会只补这些")
         return 1
+    (out_dir / FAILED_NAME).unlink(missing_ok=True)
     return 0
 
 

@@ -290,16 +290,17 @@ def process(day, url, args):
     if args.daily_mean:
         paths.append(args.output / f"ccmp_v3.1_{day:%Y%m%d}_daily.nc")
     needed = [save_product(None, path, day, args.bbox, url, i == 1) is False for i, path in enumerate(paths)]
-    if not any(needed):
-        return
-    # A validated regional source is sufficient to recreate only the missing mean.
-    if not needed[0]:
-        with xr.open_dataset(paths[0]) as subset:
-            save_product(daily_mean(subset), paths[1], day, args.bbox, url, True)
-        return
     rawdir = args.output / "raw"
-    rawdir.mkdir(parents=True, exist_ok=True)
     raw = rawdir / url.rsplit("/", 1)[1]
+    if not needed[0]:
+        # Reuse the regional file to recreate a missing mean without downloading.
+        if any(needed):
+            with xr.open_dataset(paths[0]) as subset:
+                save_product(daily_mean(subset), paths[1], day, args.bbox, url, True)
+        if not args.keep_global:
+            raw.unlink(missing_ok=True)
+        return
+    rawdir.mkdir(parents=True, exist_ok=True)
     if raw.exists():
         with xr.open_dataset(raw) as check:
             validate(check, day)

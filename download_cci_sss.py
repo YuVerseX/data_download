@@ -332,10 +332,11 @@ def _main(argv=None):
         check_dependencies(args.dry_run)
         with requests.Session() as session:
             if args.proxy == 'direct':
-                session.proxies.update(http='', https='', all='')
+                session.trust_env = False
             elif args.proxy:
                 if not args.proxy.startswith(('http://', 'https://')):
                     raise DownloadError('--proxy must be direct or an http(s) proxy URL')
+                session.trust_env = False
                 session.proxies.update(http=args.proxy, https=args.proxy)
             logging.info('Network: %s', 'explicit proxy' if args.proxy and args.proxy != 'direct' else args.proxy or 'environment proxy settings')
             root = catalog(session, PRODUCT, args.retries, args.timeout)

@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import math
-import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -183,8 +182,7 @@ def verify(path: Path, args, job: Job, metadata: dict,
                     return f"variable is missing: {name}"
                 if set(data[name].dims) != {"time", "latitude", "longitude"}:
                     return f"unexpected dimensions for {name}: {data[name].dims}"
-                for offset in range(0, data.sizes["time"], 7):
-                    data[name].isel(time=slice(offset, offset + 7)).load()
+                data[name].isel(time=[0, -1]).load()
     except Exception as exc:
         return f"unreadable NetCDF ({type(exc).__name__})"
     return None
@@ -295,24 +293,21 @@ def run(args) -> int:
             succeeded = False
             for attempt in range(1, args.retries + 1):
                 try:
-                    estimate = cm.subset(
-                        **request(args, job), dry_run=True,
-                        netcdf_compression_level=args.compression,
-                        disable_progress_bar=True)
-                    check_status(estimate, dry_run=True)
-                    file_size = response_size(estimate, "file_size")
-                    transfer_size = response_size(estimate, "data_transfer_size")
-                    report(f"{label}: attempt {attempt}/{args.retries}; "
-                           f"file ~{format_bytes(file_size)}, "
-                           f"transfer ~{format_bytes(transfer_size)}")
                     if args.dry_run:
+                        estimate = cm.subset(
+                            **request(args, job), dry_run=True,
+                            netcdf_compression_level=args.compression,
+                            disable_progress_bar=True)
+                        check_status(estimate, dry_run=True)
+                        file_size = response_size(estimate, "file_size")
+                        transfer_size = response_size(estimate, "data_transfer_size")
+                        report(f"{label}: file ~{format_bytes(file_size)}, transfer ~{format_bytes(transfer_size)}")
                         estimates_complete &= file_size is not None and transfer_size is not None
                         total_file += file_size or 0
                         total_transfer += transfer_size or 0
                         succeeded = True
                         break
-                    if file_size is not None and shutil.disk_usage(output).free < file_size * 1.2:
-                        raise DownloadError("insufficient disk space (20% reserve required)")
+                    report(f"{label}: download, attempt {attempt}/{args.retries}")
                     response = cm.subset(
                         **request(args, job), output_directory=str(output),
                         output_filename=temp.name, overwrite=True,

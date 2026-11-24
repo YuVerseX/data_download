@@ -36,9 +36,9 @@ python download_cci_sss.py --all-available -n
 | `-o/--output-dir/--out` | 输出目录，默认 `data/cci_sss` |
 | `--timeout` | 每次网络请求超时秒数，默认 120 |
 | `--retries` | 包含首次在内的总尝试次数，默认 3 |
-| `--proxy` | 接受 `direct` 或 HTTP(S) 代理地址；现有实现可能被环境代理覆盖 |
+| `--proxy` | 接受 `direct` 或 HTTP(S) 代理地址；显式指定后优先于环境代理 |
 
-固定代理或直连时按 [README](../README.md#网络与代理) 设置终端环境，不单独依赖 `--proxy`。
+不传 `--proxy` 时沿用环境与系统设置。显式指定后，requests 不再读取环境代理、`NO_PROXY`、环境 CA 路径和 netrc；VPN/TUN 仍可能转发流量。
 
 ## 预检查、校验与恢复
 
