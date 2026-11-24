@@ -427,29 +427,143 @@ def download_month(year: int, month: int, parts_dir: Path, options: Options,
 
 def merge_months(year: int, parts: list[Path], target: Path, tmp_dir: Path,
                  options: Options) -> str | None:
-    """惰性读取月分片并生成年度临时文件，校验后原子替换。"""
-    import xarray as xr
+    """按原始打包值流式合并月分片，校验后原子替换。"""
+    import netCDF4
+    import numpy as np
+
+    def chunksizes(variable, time_size: int) -> tuple[int, ...]:
+        """沿用 Toolbox 年度文件的块形状，边界小维度自动收缩。"""
+        limits = {
+            "time": 12 if "depth" in variable.dimensions else 23,
+            "depth": 4,
+            "latitude": 46,
+            "longitude": 61,
+        }
+        sizes = {name: len(variable.group().dimensions[name])
+                 for name in variable.dimensions}
+        sizes["time"] = time_size
+        return tuple(min(sizes[name], limits.get(name, sizes[name]))
+                     for name in variable.dimensions)
+
+    def copy_time_variable(sources, destination) -> None:
+        """按年度目标块拼接各月，每个压缩块只写一次。"""
+        first = sources[0]
+        time_axis = first.dimensions.index("time")
+        time_step = destination.chunking()[time_axis]
+        depth_axis = (first.dimensions.index("depth")
+                      if "depth" in first.dimensions else None)
+        depth_step = (destination.chunking()[depth_axis]
+                      if depth_axis is not None else None)
+        offsets: list[int] = []
+        total = 0
+        for source in sources:
+            offsets.append(total)
+            total += source.shape[time_axis]
+
+        for time_start in range(0, total, time_step):
+            time_end = min(time_start + time_step, total)
+            depth_starts = (range(0, first.shape[depth_axis], depth_step)
+                            if depth_axis is not None else (None,))
+            for depth_start in depth_starts:
+                block_shape = list(destination.shape)
+                block_shape[time_axis] = time_end - time_start
+                target_slice = [slice(None)] * first.ndim
+                target_slice[time_axis] = slice(time_start, time_end)
+                if depth_axis is not None:
+                    depth_end = min(depth_start + depth_step,
+                                    first.shape[depth_axis])
+                    block_shape[depth_axis] = depth_end - depth_start
+                    target_slice[depth_axis] = slice(depth_start, depth_end)
+                block = np.empty(block_shape, dtype=destination.dtype)
+
+                for source, offset in zip(sources, offsets):
+                    source_end = offset + source.shape[time_axis]
+                    overlap_start = max(time_start, offset)
+                    overlap_end = min(time_end, source_end)
+                    if overlap_start >= overlap_end:
+                        continue
+                    source_slice = [slice(None)] * first.ndim
+                    block_slice = [slice(None)] * first.ndim
+                    source_slice[time_axis] = slice(
+                        overlap_start - offset, overlap_end - offset)
+                    block_slice[time_axis] = slice(
+                        overlap_start - time_start, overlap_end - time_start)
+                    if depth_axis is not None:
+                        source_slice[depth_axis] = slice(depth_start, depth_end)
+                        block_slice[depth_axis] = slice(0, depth_end - depth_start)
+                    block[tuple(block_slice)] = source[tuple(source_slice)]
+                destination[tuple(target_slice)] = block
 
     merging = tmp_dir / f"{target.name}.merging"
     with contextlib.suppress(OSError):
         merging.unlink()
     try:
-        with xr.open_mfdataset(
-                [str(path) for path in parts], combine="nested", concat_dim="time",
-                data_vars="minimal", coords="minimal", compat="equals", join="exact",
-                combine_attrs="override", decode_timedelta=False, chunks={}) as dataset:
-            encoding: dict[str, dict] = {}
-            keep = {"scale_factor", "add_offset", "dtype", "_FillValue", "units", "calendar"}
-            for name, variable in dataset.variables.items():
-                selected = {key: value for key, value in variable.encoding.items()
-                            if key in keep}
-                if name in dataset.data_vars and options.compression > 0:
-                    selected.update(zlib=True, complevel=options.compression,
-                                    contiguous=False, shuffle=True)
-                elif name in dataset.coords:
-                    selected["_FillValue"] = None
-                encoding[name] = selected
-            dataset.to_netcdf(merging, mode="w", engine="netcdf4", encoding=encoding)
+        with contextlib.ExitStack() as stack:
+            sources = [stack.enter_context(netCDF4.Dataset(part))
+                       for part in parts]
+            template = sources[0]
+            total_time = sum(len(source.dimensions["time"])
+                             for source in sources)
+            output = stack.enter_context(
+                netCDF4.Dataset(merging, "w", format="NETCDF4"))
+            output.set_fill_off()
+            output.setncatts({name: template.getncattr(name)
+                              for name in template.ncattrs()})
+            for name, dimension in template.dimensions.items():
+                size = total_time if name == "time" else len(dimension)
+                output.createDimension(name, size)
+
+            for name, source_variable in template.variables.items():
+                fill_value = (source_variable.getncattr("_FillValue")
+                              if "_FillValue" in source_variable.ncattrs()
+                              else False)
+                create_options = {
+                    "fill_value": fill_value,
+                    "endian": source_variable.endian(),
+                }
+                if "time" in source_variable.dimensions:
+                    create_options.update(
+                        zlib=options.compression > 0,
+                        complevel=options.compression,
+                        shuffle=options.compression > 0,
+                        chunksizes=chunksizes(source_variable, total_time),
+                    )
+                else:
+                    create_options["contiguous"] = True
+                destination = output.createVariable(
+                    name, source_variable.dtype, source_variable.dimensions,
+                    **create_options)
+                destination.setncatts({
+                    attribute: source_variable.getncattr(attribute)
+                    for attribute in source_variable.ncattrs()
+                    if attribute != "_FillValue"
+                })
+                destination.set_auto_maskandscale(False)
+
+            for source, part in zip(sources, parts):
+                if set(source.variables) != set(template.variables):
+                    raise RuntimeError(f"{part.name} 的变量列表与首月不一致")
+                for name, source_variable in source.variables.items():
+                    reference = template.variables[name]
+                    if (source_variable.dimensions != reference.dimensions
+                            or source_variable.dtype != reference.dtype):
+                        raise RuntimeError(
+                            f"{part.name} 的变量 {name} 结构与首月不一致")
+                    source_variable.set_auto_maskandscale(False)
+                    if "time" not in source_variable.dimensions:
+                        reference.set_auto_maskandscale(False)
+                        if not np.array_equal(source_variable[...], reference[...]):
+                            raise RuntimeError(
+                                f"{part.name} 的非时间变量 {name} 与首月不一致")
+
+            for name, reference in template.variables.items():
+                destination = output.variables[name]
+                if "time" not in reference.dimensions:
+                    reference.set_auto_maskandscale(False)
+                    destination[...] = reference[...]
+                    continue
+                source_variables = [source.variables[name] for source in sources]
+                copy_time_variable(source_variables, destination)
 
         problem = verify(merging, year, options.variables)
         if problem is not None:
