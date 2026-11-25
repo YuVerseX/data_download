@@ -15,7 +15,11 @@
 | [OSTIA REP](docs/ostia_rep.md) · `download_ostia_rep.py` | 必填起止日期；逐日数据 | 西北太平洋 100–180°E、0–60°N，默认按月保存 |
 | [CCI SSS](docs/cci_sss.md) · `download_cci_sss.py` | 年份或起止日期；默认选至最新完整年 | 南海 105–125°E、0–25°N，七天滑动平均、逐日采样 |
 | [CCMP](docs/ccmp.md) · `download_ccmp.py` | 年份或起止日期；默认 `2001-latest` | 南海 105–125°E、0–25°N，每天四时次，可另存日均 |
-| [ERA5](docs/era5.md) · `download_era5.py` | 必填年份或起止日期 | 西北太平洋 100–180°E、0–60°N，按月下载小时风、海平面气压、热通量累计量，或 CDS 官方日平均 |
+| [ERA5](docs/era5.md) · `download_era5.py` | 必填年份或起止日期 | 西北太平洋 100–180°E、0–60°N，按月下载小时风、气压、热通量/风应力/降水蒸发，或 CDS 官方日平均 |
+| [CMEMS L3 SLA](docs/cmems_sla_l3.md) · `download_cmems_sla_l3.py` | 必填年份 | 黑潮区 137–160°E、23–41°N，按星按年裁剪为 Parquet |
+| [ACSPO L3S SST](docs/acspo_l3s.md) · `download_acspo_l3s.py` | 必填年份 | 黑潮区 137–160°E、23–41°N，OPeNDAP 服务端裁剪逐日保存 |
+| [REMSS MW L3U SST](docs/remss_mw_sst.md) · `download_remss_mw_sst.py` | 必填年份 | 黑潮区 136–161°E、22–42°N，AMSR2/GMI 逐日裁剪保存 |
+| [NOAA GDP 漂流浮标](docs/gdp_drifters.md) · `download_gdp_drifters.py` | 必填年份 | 黑潮区 137–160°E、23–41°N，按年保存 Parquet |
 
 时间参数能被接受，不代表源站已发布全部请求日期。各产品的时间定义、网格和质量标识不同，联合使用前需对齐。
 
@@ -39,10 +43,10 @@ python download_cci_sss.py --start-date 2011-01-01 --end-date 2011-01-01 -o "F:\
 
 | 数据源 | 认证准备 |
 | --- | --- |
-| MUR SST | Earthdata Login token，默认读取 `%USERPROFILE%\.edl_token` |
-| GLORYS、DUACS、CMEMS SSS/SSD、OSTIA REP | Copernicus Marine 账号，运行 `copernicusmarine login` |
+| MUR SST、ACSPO L3S、REMSS MW L3U | Earthdata Login token，默认读取 `%USERPROFILE%\.edl_token` |
+| GLORYS、DUACS、CMEMS SSS/SSD、OSTIA REP、CMEMS L3 SLA | Copernicus Marine 账号，运行 `copernicusmarine login` |
 | ERA5 | CDS 账号、数据集条款和 `%USERPROFILE%\.cdsapirc` |
-| SCSORA、Argo、CCI、CCMP | 脚本使用公开入口，不配置账号 |
+| SCSORA、Argo、CCI、CCMP、NOAA GDP | 脚本使用公开入口，不配置账号 |
 
 ## 预检查与下载量
 

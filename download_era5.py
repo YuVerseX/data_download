@@ -30,9 +30,10 @@ HEAT = {
     "ssr": "surface_net_solar_radiation", "str": "surface_net_thermal_radiation",
 }
 STRESS = {"ewss": "eastward_turbulent_surface_stress", "nsss": "northward_turbulent_surface_stress"}
+WATER = {"e": "evaporation", "tp": "total_precipitation"}
 HOUR_VARS = {
     "u10": "10m_u_component_of_wind", "v10": "10m_v_component_of_wind",
-    "msl": "mean_sea_level_pressure", **HEAT, **STRESS,
+    "msl": "mean_sea_level_pressure", **HEAT, **STRESS, **WATER,
 }
 DAILY_VARS = {
     HOUR_VARS["u10"]: ("u10",),
@@ -265,6 +266,7 @@ def check_hourly_units(data, names):
         "u10": {"ms-1", "m/s"}, "v10": {"ms-1", "m/s"}, "msl": {"pa"},
         **{name: {"jm-2", "j/m2"} for name in HEAT},
         **{name: {"nm-2s", "ns/m2"} for name in STRESS},
+        **{name: {"m"} for name in WATER},
     }
     for name in names:
         if name not in data or set(data[name].dims) != {"time", "latitude", "longitude"}:
